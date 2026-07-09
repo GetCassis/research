@@ -94,6 +94,7 @@ def pareto_fig(recs, tier, fname):
     ax.grid(alpha=0.25)
     fig.tight_layout()
     out = os.path.join(config.BASE, "results", "figures", fname)
+    os.makedirs(os.path.dirname(out), exist_ok=True)
     fig.savefig(out, dpi=150)
     print("wrote", out)
 

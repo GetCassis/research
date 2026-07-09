@@ -132,6 +132,7 @@ def main():
     ax.legend(fontsize=8)
     fig.tight_layout()
     out = os.path.join(config.BASE, "results", "figures", "full_flakiness_vs_accuracy.png")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
     fig.savefig(out, dpi=150)
     print("wrote", out)
 

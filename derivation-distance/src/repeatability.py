@@ -128,6 +128,7 @@ def main():
     ax.set_ylim(0, 100)
     fig.tight_layout()
     out = os.path.join(config.BASE, "results", "figures", "full_repeatability_by_level.png")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
     fig.savefig(out, dpi=150)
     print("\nwrote", out)
 
