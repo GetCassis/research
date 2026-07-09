@@ -1,0 +1,814 @@
+# Olist (Brazilian marketplace) question set for the derivation-distance study.
+# All questions are derivation questions (gap: false). The planted "at-risk
+# sellers" completeness gap is intentionally excluded (it tests completeness, not
+# derivation). Date windows anchor to the data's max purchase date 2026-05-30
+# (never CURRENT_DATE). Money is EUR. Olist gotchas baked into required_facts:
+#  - a PERSON is CUSTOMERS.CUSTOMER_UNIQUE_ID (CUSTOMER_ID is per-order);
+#  - business volume = SUM(ORDER_ITEMS.PRICE), delivered orders only;
+#  - English category via PRODUCT_CATEGORY_NAME_TRANSLATION (raw is Portuguese).
+# Difficulty strata: single_agg, multi_join, date_window, multi_step (~3 each)
+# plus hard_multistep (11).
+
+# ---- single_agg (3) ---------------------------------------------------------
+
+- id: olist__total_business_volume
+  dataset: olist
+  question: "What is our total business volume (GMV)?"
+  difficulty: single_agg
+  uses: [business_volume]
+  required_facts:
+    - "Business volume (BV / GMV / revenue / sales) = SUM(ORDER_ITEMS.PRICE); money lives on ORDER_ITEMS, not ORDERS. FREIGHT_VALUE (shipping) is excluded."
+    - "Realized sales are delivered orders only: join ORDER_ITEMS to ORDERS and filter ORDER_STATUS = 'delivered'."
+  gap: false
+  gold_sql: |
+    SELECT SUM(oi.PRICE) AS business_volume
+    FROM ORDER_ITEMS oi
+    JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+    WHERE o.ORDER_STATUS = 'delivered'
+  example_question: "How many delivered orders have we had in total?"
+  example_sql: |
+    SELECT COUNT(DISTINCT ORDER_ID) AS delivered_orders
+    FROM ORDERS
+    WHERE ORDER_STATUS = 'delivered'
+  notes: "SUM(PRICE) over delivered orders, freight excluded. Expect ~13221498.11 EUR."
+
+- id: olist__delivered_order_count
+  dataset: olist
+  question: "How many delivered orders have we had in total?"
+  difficulty: single_agg
+  uses: [business_volume]
+  required_facts:
+    - "Order count = COUNT(DISTINCT ORDER_ID) (ORDERS is one row per order, but count distinct to stay safe across joins)."
+    - "Delivered orders = ORDER_STATUS = 'delivered'."
+  gap: false
+  gold_sql: |
+    SELECT COUNT(DISTINCT ORDER_ID) AS delivered_orders
+    FROM ORDERS
+    WHERE ORDER_STATUS = 'delivered'
+  example_question: "What is our total business volume (GMV)?"
+  example_sql: |
+    SELECT SUM(oi.PRICE) AS business_volume
+    FROM ORDER_ITEMS oi
+    JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+    WHERE o.ORDER_STATUS = 'delivered'
+  notes: "COUNT(DISTINCT ORDER_ID) filtered to delivered. Expect 96478."
+
+- id: olist__distinct_customers
+  dataset: olist
+  question: "How many distinct customers (real people) do we have?"
+  difficulty: single_agg
+  uses: [repeat_customer_rate]
+  required_facts:
+    - "A real person = CUSTOMERS.CUSTOMER_UNIQUE_ID. CUSTOMER_ID is a per-order key (one per order); never count people with it."
+  gap: false
+  gold_sql: |
+    SELECT COUNT(DISTINCT CUSTOMER_UNIQUE_ID) AS distinct_customers
+    FROM CUSTOMERS
+  example_question: "How many per-order customer records do we have?"
+  example_sql: |
+    SELECT COUNT(DISTINCT CUSTOMER_ID) AS customer_records
+    FROM CUSTOMERS
+  notes: "Count people by CUSTOMER_UNIQUE_ID, not CUSTOMER_ID. Expect 96096 (not 99441, the row count)."
+
+# ---- multi_join (3) ---------------------------------------------------------
+
+- id: olist__business_volume_by_category
+  dataset: olist
+  question: "What is business volume by product category (English label), for the top 5 categories?"
+  difficulty: multi_join
+  uses: [business_volume]
+  required_facts:
+    - "Business volume = SUM(ORDER_ITEMS.PRICE) over delivered orders (join ORDER_ITEMS to ORDERS, ORDER_STATUS = 'delivered'); freight excluded."
+    - "A product's category is PRODUCTS.PRODUCT_CATEGORY_NAME (Portuguese); for the English label LEFT JOIN PRODUCT_CATEGORY_NAME_TRANSLATION and COALESCE the English name with the raw value."
+    - "'Top 5' means order by business volume descending and LIMIT 5."
+  gap: false
+  gold_sql: |
+    SELECT COALESCE(t.PRODUCT_CATEGORY_NAME_ENGLISH, p.PRODUCT_CATEGORY_NAME) AS category,
+           SUM(oi.PRICE) AS business_volume
+    FROM ORDER_ITEMS oi
+    JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+    JOIN PRODUCTS p ON oi.PRODUCT_ID = p.PRODUCT_ID
+    LEFT JOIN PRODUCT_CATEGORY_NAME_TRANSLATION t
+      ON p.PRODUCT_CATEGORY_NAME = t.PRODUCT_CATEGORY_NAME
+    WHERE o.ORDER_STATUS = 'delivered'
+    GROUP BY category
+    ORDER BY business_volume DESC, category
+    LIMIT 5
+  example_question: "What is business volume by seller state, for the top 5 states?"
+  example_sql: |
+    SELECT s.SELLER_STATE,
+           SUM(oi.PRICE) AS business_volume
+    FROM ORDER_ITEMS oi
+    JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+    JOIN SELLERS s ON oi.SELLER_ID = s.SELLER_ID
+    WHERE o.ORDER_STATUS = 'delivered'
+    GROUP BY s.SELLER_STATE
+    ORDER BY business_volume DESC, s.SELLER_STATE
+    LIMIT 5
+  notes: "English category via translation lookup (LEFT JOIN + COALESCE). Top is health_beauty ~1233132, then watches_gifts ~1166177."
+
+- id: olist__business_volume_by_customer_state
+  dataset: olist
+  question: "What is business volume by customer state, for the top 5 states?"
+  difficulty: multi_join
+  uses: [business_volume]
+  required_facts:
+    - "Business volume = SUM(ORDER_ITEMS.PRICE) over delivered orders (join ORDER_ITEMS to ORDERS, ORDER_STATUS = 'delivered'); freight excluded."
+    - "Customer state = CUSTOMERS.CUSTOMER_STATE; reach it via ORDERS.CUSTOMER_ID = CUSTOMERS.CUSTOMER_ID."
+    - "'Top 5' means order by business volume descending and LIMIT 5."
+  gap: false
+  gold_sql: |
+    SELECT c.CUSTOMER_STATE,
+           SUM(oi.PRICE) AS business_volume
+    FROM ORDER_ITEMS oi
+    JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+    JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+    WHERE o.ORDER_STATUS = 'delivered'
+    GROUP BY c.CUSTOMER_STATE
+    ORDER BY business_volume DESC, c.CUSTOMER_STATE
+    LIMIT 5
+  example_question: "What is business volume by product category (English), for the top 5 categories?"
+  example_sql: |
+    SELECT COALESCE(t.PRODUCT_CATEGORY_NAME_ENGLISH, p.PRODUCT_CATEGORY_NAME) AS category,
+           SUM(oi.PRICE) AS business_volume
+    FROM ORDER_ITEMS oi
+    JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+    JOIN PRODUCTS p ON oi.PRODUCT_ID = p.PRODUCT_ID
+    LEFT JOIN PRODUCT_CATEGORY_NAME_TRANSLATION t
+      ON p.PRODUCT_CATEGORY_NAME = t.PRODUCT_CATEGORY_NAME
+    WHERE o.ORDER_STATUS = 'delivered'
+    GROUP BY category
+    ORDER BY business_volume DESC, category
+    LIMIT 5
+  notes: "Join ORDER_ITEMS -> ORDERS -> CUSTOMERS for the customer state cut. SP dominates (~42% of customers)."
+
+- id: olist__top_seller_states_by_business_volume
+  dataset: olist
+  question: "Which 5 seller states have the highest business volume, and how much?"
+  difficulty: multi_join
+  uses: [business_volume]
+  required_facts:
+    - "Business volume = SUM(ORDER_ITEMS.PRICE) over delivered orders (join ORDER_ITEMS to ORDERS, ORDER_STATUS = 'delivered'); freight excluded."
+    - "A seller's state is SELLERS.SELLER_STATE; attribute sales to a seller via ORDER_ITEMS.SELLER_ID = SELLERS.SELLER_ID."
+    - "'Top 5' means order by business volume descending and LIMIT 5."
+  gap: false
+  gold_sql: |
+    SELECT s.SELLER_STATE,
+           SUM(oi.PRICE) AS business_volume
+    FROM ORDER_ITEMS oi
+    JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+    JOIN SELLERS s ON oi.SELLER_ID = s.SELLER_ID
+    WHERE o.ORDER_STATUS = 'delivered'
+    GROUP BY s.SELLER_STATE
+    ORDER BY business_volume DESC, s.SELLER_STATE
+    LIMIT 5
+  example_question: "Which 5 customer states have the highest business volume, and how much?"
+  example_sql: |
+    SELECT c.CUSTOMER_STATE,
+           SUM(oi.PRICE) AS business_volume
+    FROM ORDER_ITEMS oi
+    JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+    JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+    WHERE o.ORDER_STATUS = 'delivered'
+    GROUP BY c.CUSTOMER_STATE
+    ORDER BY business_volume DESC, c.CUSTOMER_STATE
+    LIMIT 5
+  notes: "Seller attribution via ORDER_ITEMS.SELLER_ID -> SELLERS. SP dominates (~60% of sellers)."
+
+# ---- date_window (3) --------------------------------------------------------
+
+- id: olist__business_volume_2025
+  dataset: olist
+  question: "What was our business volume in 2025, in euros?"
+  difficulty: date_window
+  uses: [business_volume]
+  required_facts:
+    - "Business volume = SUM(ORDER_ITEMS.PRICE) over delivered orders (join ORDER_ITEMS to ORDERS, ORDER_STATUS = 'delivered'); freight excluded; amounts are EUR."
+    - "'In 2025' filters the order's ORDER_PURCHASE_TIMESTAMP to calendar year 2025."
+  gap: false
+  gold_sql: |
+    SELECT SUM(oi.PRICE) AS business_volume_2025
+    FROM ORDER_ITEMS oi
+    JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+    WHERE o.ORDER_STATUS = 'delivered'
+      AND YEAR(o.ORDER_PURCHASE_TIMESTAMP) = 2025
+  example_question: "What was our business volume in 2024, in euros?"
+  example_sql: |
+    SELECT SUM(oi.PRICE) AS business_volume_2024
+    FROM ORDER_ITEMS oi
+    JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+    WHERE o.ORDER_STATUS = 'delivered'
+      AND YEAR(o.ORDER_PURCHASE_TIMESTAMP) = 2024
+  notes: "Delivered-only SUM(PRICE), purchase year 2025. Expect 9035230.12 EUR (documented)."
+
+- id: olist__business_volume_last_90d
+  dataset: olist
+  question: "What was our business volume in the last 90 days?"
+  difficulty: date_window
+  uses: [business_volume]
+  required_facts:
+    - "Business volume = SUM(ORDER_ITEMS.PRICE) over delivered orders (join ORDER_ITEMS to ORDERS, ORDER_STATUS = 'delivered'); freight excluded."
+    - "'Last 90 days' is the 90 days ending on the snapshot date: ORDER_PURCHASE_TIMESTAMP >= snapshot_date - 90 days (snapshot = 2026-05-30, never CURRENT_DATE)."
+  gap: false
+  gold_sql: |
+    SELECT SUM(oi.PRICE) AS business_volume_last_90d
+    FROM ORDER_ITEMS oi
+    JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+    WHERE o.ORDER_STATUS = 'delivered'
+      AND o.ORDER_PURCHASE_TIMESTAMP >= DATE '2026-05-30' - INTERVAL 90 DAY
+  example_question: "How many delivered orders did we have in the last 90 days?"
+  example_sql: |
+    SELECT COUNT(DISTINCT o.ORDER_ID) AS orders_last_90d
+    FROM ORDERS o
+    WHERE o.ORDER_STATUS = 'delivered'
+      AND o.ORDER_PURCHASE_TIMESTAMP >= DATE '2026-05-30' - INTERVAL 90 DAY
+  notes: "Anchor 'today' to 2026-05-30 (max purchase timestamp). Delivered-only SUM(PRICE) in the window."
+
+- id: olist__new_customers_last_90d
+  dataset: olist
+  question: "How many new customers did we acquire in the last 90 days (real people whose first ever order falls in the window)?"
+  difficulty: date_window
+  uses: [repeat_customer_rate]
+  required_facts:
+    - "A real person = CUSTOMERS.CUSTOMER_UNIQUE_ID, not the per-order CUSTOMER_ID; join ORDERS.CUSTOMER_ID = CUSTOMERS.CUSTOMER_ID first."
+    - "A person's first purchase = their earliest ORDERS.ORDER_PURCHASE_TIMESTAMP (MIN over that person's orders)."
+    - "A new customer in the window = a person whose first-ever purchase falls in the window; count people, not orders."
+    - "'Last 90 days' is the 90 days ending on the snapshot date: first_purchase >= snapshot_date - 90 days (snapshot = 2026-05-30)."
+  gap: false
+  gold_sql: |
+    SELECT COUNT(*) AS new_customers_last_90d
+    FROM (
+      SELECT c.CUSTOMER_UNIQUE_ID, MIN(o.ORDER_PURCHASE_TIMESTAMP) AS first_purchase
+      FROM ORDERS o
+      JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+      GROUP BY c.CUSTOMER_UNIQUE_ID
+    )
+    WHERE first_purchase >= DATE '2026-05-30' - INTERVAL 90 DAY
+  example_question: "How many distinct customers placed any order in the last 90 days?"
+  example_sql: |
+    SELECT COUNT(DISTINCT c.CUSTOMER_UNIQUE_ID) AS active_customers_last_90d
+    FROM ORDERS o
+    JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+    WHERE o.ORDER_PURCHASE_TIMESTAMP >= DATE '2026-05-30' - INTERVAL 90 DAY
+  notes: "Per-person first purchase keyed by CUSTOMER_UNIQUE_ID, then filter into the 90-day window. Anchored to 2026-05-30."
+
+# ---- multi_step (3) ---------------------------------------------------------
+
+- id: olist__average_order_value
+  dataset: olist
+  question: "What is our average order value (AOV)?"
+  difficulty: multi_step
+  uses: [average_order_value]
+  required_facts:
+    - "AOV = SUM(ORDER_ITEMS.PRICE) / COUNT(DISTINCT ORDER_ID) over delivered orders (join ORDER_ITEMS to ORDERS, ORDER_STATUS = 'delivered'); freight excluded."
+    - "The denominator is distinct orders, not order items (an order spans one or more item lines)."
+  gap: false
+  gold_sql: |
+    SELECT SUM(oi.PRICE) / COUNT(DISTINCT o.ORDER_ID) AS average_order_value
+    FROM ORDER_ITEMS oi
+    JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+    WHERE o.ORDER_STATUS = 'delivered'
+  example_question: "What is the average freight charged per delivered order?"
+  example_sql: |
+    SELECT SUM(oi.FREIGHT_VALUE) / COUNT(DISTINCT o.ORDER_ID) AS avg_freight_per_order
+    FROM ORDER_ITEMS oi
+    JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+    WHERE o.ORDER_STATUS = 'delivered'
+  notes: "SUM(PRICE) over distinct delivered orders. Expect ~137.04 EUR."
+
+- id: olist__business_volume_by_month
+  dataset: olist
+  question: "What is business volume by month?"
+  difficulty: multi_step
+  uses: [business_volume]
+  required_facts:
+    - "Business volume = SUM(ORDER_ITEMS.PRICE) over delivered orders (join ORDER_ITEMS to ORDERS, ORDER_STATUS = 'delivered'); freight excluded."
+    - "'By month' buckets the order's ORDER_PURCHASE_TIMESTAMP to calendar month."
+  gap: false
+  gold_sql: |
+    SELECT date_trunc('month', o.ORDER_PURCHASE_TIMESTAMP) AS month,
+           SUM(oi.PRICE) AS business_volume
+    FROM ORDER_ITEMS oi
+    JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+    WHERE o.ORDER_STATUS = 'delivered'
+    GROUP BY month
+    ORDER BY month
+  example_question: "How many delivered orders are there by month?"
+  example_sql: |
+    SELECT date_trunc('month', o.ORDER_PURCHASE_TIMESTAMP) AS month,
+           COUNT(DISTINCT o.ORDER_ID) AS orders
+    FROM ORDERS o
+    WHERE o.ORDER_STATUS = 'delivered'
+    GROUP BY month
+    ORDER BY month
+  notes: "Bucket purchase timestamp to month, sum PRICE. 23 monthly buckets (delivered orders span 2024-04..2026-05)."
+
+- id: olist__avg_review_score
+  dataset: olist
+  question: "What is the average review score across orders?"
+  difficulty: multi_step
+  uses: [business_volume]
+  required_facts:
+    - "Review score = ORDER_REVIEWS.REVIEW_SCORE (1-5)."
+    - "REVIEW_ID is not unique; dedup reviews by ORDER_ID so each order contributes one score (e.g. one score per ORDER_ID), then average over orders."
+  gap: false
+  gold_sql: |
+    SELECT AVG(order_score) AS avg_review_score
+    FROM (
+      SELECT ORDER_ID, MAX(REVIEW_SCORE) AS order_score
+      FROM ORDER_REVIEWS
+      GROUP BY ORDER_ID
+    )
+  example_question: "What is the average review score among 1-star and 5-star reviews only?"
+  example_sql: |
+    SELECT AVG(order_score) AS avg_extreme_score
+    FROM (
+      SELECT ORDER_ID, MAX(REVIEW_SCORE) AS order_score
+      FROM ORDER_REVIEWS
+      GROUP BY ORDER_ID
+    )
+    WHERE order_score IN (1, 5)
+  notes: "Dedup by ORDER_ID first (REVIEW_ID not unique), then AVG over orders. Expect ~4.089. Scores skew positive (5 dominates)."
+
+# ---- hard_multistep (11) ----------------------------------------------------
+# Even with every fact present, the gold here must COMPOSE several steps
+# (CTEs, window functions, anti-joins, ratios, per-group argmax, two-window
+# comparisons). These stress derivation effort beyond the single-step strata.
+
+- id: olist__mom_business_volume_growth
+  dataset: olist
+  question: "What is the month-over-month business-volume growth rate (%) for each month?"
+  difficulty: hard_multistep
+  uses: [business_volume]
+  required_facts:
+    - "Business volume = SUM(ORDER_ITEMS.PRICE) over delivered orders (join ORDER_ITEMS to ORDERS, ORDER_STATUS = 'delivered'); freight excluded."
+    - "'By month' buckets ORDER_PURCHASE_TIMESTAMP to calendar month."
+    - "Month-over-month growth % = 100 * (this month's BV - prior month's BV) / prior month's BV, comparing each month to the immediately preceding calendar month (e.g. via LAG)."
+    - "The first month has no prior month, so its growth is NULL."
+  gap: false
+  gold_sql: |
+    WITH monthly AS (
+      SELECT date_trunc('month', o.ORDER_PURCHASE_TIMESTAMP) AS month,
+             SUM(oi.PRICE) AS bv
+      FROM ORDER_ITEMS oi
+      JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+      WHERE o.ORDER_STATUS = 'delivered'
+      GROUP BY 1
+    )
+    SELECT month,
+           bv,
+           100.0 * (bv - LAG(bv) OVER (ORDER BY month))
+                 / LAG(bv) OVER (ORDER BY month) AS growth_pct
+    FROM monthly
+    ORDER BY month
+  example_question: "What is the month-over-month delivered-order-count growth rate (%) for each month?"
+  example_sql: |
+    WITH monthly AS (
+      SELECT date_trunc('month', o.ORDER_PURCHASE_TIMESTAMP) AS month,
+             COUNT(DISTINCT o.ORDER_ID) AS orders
+      FROM ORDERS o
+      WHERE o.ORDER_STATUS = 'delivered'
+      GROUP BY 1
+    )
+    SELECT month,
+           orders,
+           100.0 * (orders - LAG(orders) OVER (ORDER BY month))
+                 / LAG(orders) OVER (ORDER BY month) AS growth_pct
+    FROM monthly
+    ORDER BY month
+  notes: "Aggregate BV to month, then LAG over ordered months. First month has NULL growth. 23 monthly rows."
+
+- id: olist__category_revenue_share
+  dataset: olist
+  question: "What is each product category's (English label) share (%) of total business volume?"
+  difficulty: hard_multistep
+  uses: [business_volume]
+  required_facts:
+    - "Business volume = SUM(ORDER_ITEMS.PRICE) over delivered orders (join ORDER_ITEMS to ORDERS, ORDER_STATUS = 'delivered'); freight excluded."
+    - "English category via LEFT JOIN PRODUCT_CATEGORY_NAME_TRANSLATION, COALESCE the English name with the raw Portuguese value."
+    - "Share of total = a category's BV divided by the grand-total BV across all categories, x100 (denominator is the company-wide total, e.g. a window SUM over all groups)."
+  gap: false
+  gold_sql: |
+    SELECT COALESCE(t.PRODUCT_CATEGORY_NAME_ENGLISH, p.PRODUCT_CATEGORY_NAME) AS category,
+           100.0 * SUM(oi.PRICE) / SUM(SUM(oi.PRICE)) OVER () AS pct_of_total
+    FROM ORDER_ITEMS oi
+    JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+    JOIN PRODUCTS p ON oi.PRODUCT_ID = p.PRODUCT_ID
+    LEFT JOIN PRODUCT_CATEGORY_NAME_TRANSLATION t
+      ON p.PRODUCT_CATEGORY_NAME = t.PRODUCT_CATEGORY_NAME
+    WHERE o.ORDER_STATUS = 'delivered'
+    GROUP BY category
+    ORDER BY pct_of_total DESC, category
+  example_question: "What is each customer state's share (%) of total business volume?"
+  example_sql: |
+    SELECT c.CUSTOMER_STATE,
+           SUM(oi.PRICE) AS business_volume,
+           100.0 * SUM(oi.PRICE) / SUM(SUM(oi.PRICE)) OVER () AS pct_of_total
+    FROM ORDER_ITEMS oi
+    JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+    JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+    WHERE o.ORDER_STATUS = 'delivered'
+    GROUP BY c.CUSTOMER_STATE
+    ORDER BY business_volume DESC, c.CUSTOMER_STATE
+  notes: "Per-category SUM divided by a window SUM-over-all (no PARTITION). Shares sum to 100. health_beauty leads."
+
+- id: olist__cumulative_business_volume_by_month
+  dataset: olist
+  question: "What is the running cumulative business volume by month (BV to date at the end of each month)?"
+  difficulty: hard_multistep
+  uses: [business_volume]
+  required_facts:
+    - "Business volume = SUM(ORDER_ITEMS.PRICE) over delivered orders (join ORDER_ITEMS to ORDERS, ORDER_STATUS = 'delivered'); freight excluded."
+    - "'By month' buckets ORDER_PURCHASE_TIMESTAMP to calendar month."
+    - "Cumulative/running BV = the sum of monthly BV from the first month through the current month (a running total ordered by month), not the per-month figure."
+  gap: false
+  gold_sql: |
+    WITH monthly AS (
+      SELECT date_trunc('month', o.ORDER_PURCHASE_TIMESTAMP) AS month,
+             SUM(oi.PRICE) AS bv
+      FROM ORDER_ITEMS oi
+      JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+      WHERE o.ORDER_STATUS = 'delivered'
+      GROUP BY 1
+    )
+    SELECT month,
+           bv,
+           SUM(bv) OVER (ORDER BY month
+                         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_bv
+    FROM monthly
+    ORDER BY month
+  example_question: "What is the running cumulative delivered-order count by month?"
+  example_sql: |
+    WITH monthly AS (
+      SELECT date_trunc('month', o.ORDER_PURCHASE_TIMESTAMP) AS month,
+             COUNT(DISTINCT o.ORDER_ID) AS orders
+      FROM ORDERS o
+      WHERE o.ORDER_STATUS = 'delivered'
+      GROUP BY 1
+    )
+    SELECT month,
+           orders,
+           SUM(orders) OVER (ORDER BY month
+                             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_orders
+    FROM monthly
+    ORDER BY month
+  notes: "Aggregate to month, then a window running SUM ordered by month. Last row's cumulative equals total BV ~13221498. 23 rows."
+
+- id: olist__repeat_customer_rate
+  dataset: olist
+  question: "What is our repeat-customer rate, i.e. the share (%) of customers who placed at least 2 delivered orders?"
+  difficulty: hard_multistep
+  uses: [repeat_customer_rate]
+  required_facts:
+    - "A customer = CUSTOMERS.CUSTOMER_UNIQUE_ID (a real person), never the per-order CUSTOMER_ID; join ORDERS.CUSTOMER_ID = CUSTOMERS.CUSTOMER_ID first."
+    - "Count delivered orders per person: distinct ORDER_ID where ORDER_STATUS = 'delivered'."
+    - "Repeat-customer rate = (people with >= 2 delivered orders) / (people with >= 1 delivered order), x100."
+    - "Compute one order count per person first, then aggregate across people (denominator is people, not orders)."
+  gap: false
+  gold_sql: |
+    WITH per_person AS (
+      SELECT c.CUSTOMER_UNIQUE_ID, COUNT(DISTINCT o.ORDER_ID) AS n_orders
+      FROM ORDERS o
+      JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+      WHERE o.ORDER_STATUS = 'delivered'
+      GROUP BY c.CUSTOMER_UNIQUE_ID
+    )
+    SELECT 100.0 * COUNT(*) FILTER (WHERE n_orders >= 2) / COUNT(*) AS repeat_customer_rate_pct
+    FROM per_person
+  example_question: "What share (%) of customers are single-order (one-and-done) customers, among those with at least one delivered order?"
+  example_sql: |
+    WITH per_person AS (
+      SELECT c.CUSTOMER_UNIQUE_ID, COUNT(DISTINCT o.ORDER_ID) AS n_orders
+      FROM ORDERS o
+      JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+      WHERE o.ORDER_STATUS = 'delivered'
+      GROUP BY c.CUSTOMER_UNIQUE_ID
+    )
+    SELECT 100.0 * COUNT(*) FILTER (WHERE n_orders = 1) / COUNT(*) AS single_order_rate_pct
+    FROM per_person
+  notes: "Per-person delivered-order counts keyed by CUSTOMER_UNIQUE_ID, then FILTER >= 2 over people. Expect ~3.00%."
+
+- id: olist__top_category_per_customer_state
+  dataset: olist
+  question: "What is the top product category (by business volume, English label) for each customer state?"
+  difficulty: hard_multistep
+  uses: [business_volume]
+  required_facts:
+    - "Business volume = SUM(ORDER_ITEMS.PRICE) over delivered orders (join ORDER_ITEMS to ORDERS, ORDER_STATUS = 'delivered'); freight excluded."
+    - "English category via LEFT JOIN PRODUCT_CATEGORY_NAME_TRANSLATION, COALESCE with the raw Portuguese value; customer state = CUSTOMERS.CUSTOMER_STATE via ORDERS.CUSTOMER_ID = CUSTOMERS.CUSTOMER_ID."
+    - "'Top per state' = rank categories within each state by BV and keep the top one (one row per state, e.g. ROW_NUMBER partitioned by state)."
+    - "Break ties deterministically (e.g. by category name) so exactly one category is returned per state."
+  gap: false
+  gold_sql: |
+    WITH cat_state AS (
+      SELECT c.CUSTOMER_STATE AS state,
+             COALESCE(t.PRODUCT_CATEGORY_NAME_ENGLISH, p.PRODUCT_CATEGORY_NAME) AS category,
+             SUM(oi.PRICE) AS bv
+      FROM ORDER_ITEMS oi
+      JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+      JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+      JOIN PRODUCTS p ON oi.PRODUCT_ID = p.PRODUCT_ID
+      LEFT JOIN PRODUCT_CATEGORY_NAME_TRANSLATION t
+        ON p.PRODUCT_CATEGORY_NAME = t.PRODUCT_CATEGORY_NAME
+      WHERE o.ORDER_STATUS = 'delivered'
+      GROUP BY state, category
+    ),
+    ranked AS (
+      SELECT cat_state.*,
+             ROW_NUMBER() OVER (PARTITION BY state ORDER BY bv DESC, category) AS rn
+      FROM cat_state
+    )
+    SELECT state, category, bv
+    FROM ranked
+    WHERE rn = 1
+    ORDER BY state
+  example_question: "What is the top product category (by business volume, English label) for each seller state?"
+  example_sql: |
+    WITH cat_state AS (
+      SELECT s.SELLER_STATE AS state,
+             COALESCE(t.PRODUCT_CATEGORY_NAME_ENGLISH, p.PRODUCT_CATEGORY_NAME) AS category,
+             SUM(oi.PRICE) AS bv
+      FROM ORDER_ITEMS oi
+      JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+      JOIN SELLERS s ON oi.SELLER_ID = s.SELLER_ID
+      JOIN PRODUCTS p ON oi.PRODUCT_ID = p.PRODUCT_ID
+      LEFT JOIN PRODUCT_CATEGORY_NAME_TRANSLATION t
+        ON p.PRODUCT_CATEGORY_NAME = t.PRODUCT_CATEGORY_NAME
+      WHERE o.ORDER_STATUS = 'delivered'
+      GROUP BY state, category
+    ),
+    ranked AS (
+      SELECT cat_state.*,
+             ROW_NUMBER() OVER (PARTITION BY state ORDER BY bv DESC, category) AS rn
+      FROM cat_state
+    )
+    SELECT state, category, bv
+    FROM ranked
+    WHERE rn = 1
+    ORDER BY state
+  notes: "ROW_NUMBER partitioned by customer state, tie-break on category name. One row per state."
+
+- id: olist__avg_days_between_orders
+  dataset: olist
+  question: "On average, how many days elapse between a customer's consecutive orders (averaged across customers)?"
+  difficulty: hard_multistep
+  uses: [repeat_customer_rate]
+  required_facts:
+    - "A customer = CUSTOMERS.CUSTOMER_UNIQUE_ID (a real person), never the per-order CUSTOMER_ID; join ORDERS.CUSTOMER_ID = CUSTOMERS.CUSTOMER_ID first."
+    - "Order timing comes from ORDERS.ORDER_PURCHASE_TIMESTAMP, ordered per person."
+    - "The gap between consecutive orders is the day difference between an order and that same person's immediately preceding order (e.g. via LAG partitioned by CUSTOMER_UNIQUE_ID)."
+    - "People with only one order contribute no gaps and are excluded."
+    - "Average per person first, then average those per-person averages across people (so frequent buyers don't dominate)."
+  gap: false
+  gold_sql: |
+    WITH ordered AS (
+      SELECT c.CUSTOMER_UNIQUE_ID AS person, o.ORDER_PURCHASE_TIMESTAMP AS ts
+      FROM ORDERS o
+      JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+    ),
+    gaps AS (
+      SELECT person,
+             date_diff('day',
+                       LAG(ts) OVER (PARTITION BY person ORDER BY ts),
+                       ts) AS gap_days
+      FROM ordered
+    ),
+    per_person AS (
+      SELECT person, AVG(gap_days) AS avg_gap
+      FROM gaps
+      WHERE gap_days IS NOT NULL
+      GROUP BY person
+    )
+    SELECT AVG(avg_gap) AS avg_days_between_orders
+    FROM per_person
+  example_question: "On average, how many days pass between a customer's first order and their most recent order (averaged across customers)?"
+  example_sql: |
+    WITH per_person AS (
+      SELECT c.CUSTOMER_UNIQUE_ID AS person,
+             date_diff('day', MIN(o.ORDER_PURCHASE_TIMESTAMP), MAX(o.ORDER_PURCHASE_TIMESTAMP)) AS span_days,
+             COUNT(DISTINCT o.ORDER_ID) AS n_orders
+      FROM ORDERS o
+      JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+      GROUP BY c.CUSTOMER_UNIQUE_ID
+    )
+    SELECT AVG(span_days) AS avg_span_days
+    FROM per_person
+    WHERE n_orders >= 2
+  notes: "LAG on purchase timestamp partitioned by CUSTOMER_UNIQUE_ID for consecutive gaps, average per person, then across people. Single-order people excluded."
+
+- id: olist__accelerating_customers
+  dataset: olist
+  question: "How many customers spent more in the last 90 days than in the 90 days before that?"
+  difficulty: hard_multistep
+  uses: [business_volume]
+  required_facts:
+    - "Spend = a person's SUM(ORDER_ITEMS.PRICE) over delivered orders in a window (join ORDER_ITEMS to ORDERS, ORDER_STATUS = 'delivered'); freight excluded."
+    - "A customer = CUSTOMERS.CUSTOMER_UNIQUE_ID, never the per-order CUSTOMER_ID; join ORDERS.CUSTOMER_ID = CUSTOMERS.CUSTOMER_ID first."
+    - "'Last 90 days' is ORDER_PURCHASE_TIMESTAMP >= snapshot_date - 90 days; 'the 90 days before that' is snapshot_date - 180 days <= ts < snapshot_date - 90 days (non-overlapping). Snapshot = 2026-05-30."
+    - "Compute both windowed sums per person and count people whose last-90 spend strictly exceeds prior-90 spend; a person absent from a window contributes 0."
+  gap: false
+  gold_sql: |
+    WITH per_person AS (
+      SELECT c.CUSTOMER_UNIQUE_ID AS person,
+             SUM(oi.PRICE) FILTER (
+               WHERE o.ORDER_PURCHASE_TIMESTAMP >= DATE '2026-05-30' - INTERVAL 90 DAY) AS last90,
+             SUM(oi.PRICE) FILTER (
+               WHERE o.ORDER_PURCHASE_TIMESTAMP >= DATE '2026-05-30' - INTERVAL 180 DAY
+                 AND o.ORDER_PURCHASE_TIMESTAMP <  DATE '2026-05-30' - INTERVAL 90 DAY) AS prior90
+      FROM ORDER_ITEMS oi
+      JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+      JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+      WHERE o.ORDER_STATUS = 'delivered'
+      GROUP BY c.CUSTOMER_UNIQUE_ID
+    )
+    SELECT COUNT(*) AS accelerating_customers
+    FROM per_person
+    WHERE COALESCE(last90, 0) > COALESCE(prior90, 0)
+  example_question: "How many customers placed more delivered orders in the last 90 days than in the 90 days before that?"
+  example_sql: |
+    WITH per_person AS (
+      SELECT c.CUSTOMER_UNIQUE_ID AS person,
+             COUNT(DISTINCT o.ORDER_ID) FILTER (
+               WHERE o.ORDER_PURCHASE_TIMESTAMP >= DATE '2026-05-30' - INTERVAL 90 DAY) AS last90,
+             COUNT(DISTINCT o.ORDER_ID) FILTER (
+               WHERE o.ORDER_PURCHASE_TIMESTAMP >= DATE '2026-05-30' - INTERVAL 180 DAY
+                 AND o.ORDER_PURCHASE_TIMESTAMP <  DATE '2026-05-30' - INTERVAL 90 DAY) AS prior90
+      FROM ORDERS o
+      JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+      WHERE o.ORDER_STATUS = 'delivered'
+      GROUP BY c.CUSTOMER_UNIQUE_ID
+    )
+    SELECT COUNT(*) AS accelerating_customers
+    FROM per_person
+    WHERE COALESCE(last90, 0) > COALESCE(prior90, 0)
+  notes: "Two non-overlapping 90-day windowed sums per person (keyed by CUSTOMER_UNIQUE_ID) vs 2026-05-30, then compare. Absent-in-window = 0 spend."
+
+- id: olist__late_delivery_rate_by_seller_state
+  dataset: olist
+  question: "What is the late-delivery rate (%) by seller state, for states with the highest rate first?"
+  difficulty: hard_multistep
+  uses: [late_delivery_rate]
+  required_facts:
+    - "An order is late when ORDER_DELIVERED_CUSTOMER_DATE > ORDER_ESTIMATED_DELIVERY_DATE; only meaningful for delivered orders with a non-null delivery date (filter ORDER_STATUS = 'delivered' AND ORDER_DELIVERED_CUSTOMER_DATE IS NOT NULL)."
+    - "Late-delivery rate = 100 * late orders / all qualifying orders, computed per group."
+    - "A seller's state = SELLERS.SELLER_STATE via ORDER_ITEMS.SELLER_ID = SELLERS.SELLER_ID; count each order once per seller-state (an order can have items from several sellers, so distinct ORDER_ID per state)."
+  gap: false
+  gold_sql: |
+    WITH order_state AS (
+      SELECT DISTINCT s.SELLER_STATE AS state, o.ORDER_ID,
+             (o.ORDER_DELIVERED_CUSTOMER_DATE > o.ORDER_ESTIMATED_DELIVERY_DATE) AS is_late
+      FROM ORDER_ITEMS oi
+      JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+      JOIN SELLERS s ON oi.SELLER_ID = s.SELLER_ID
+      WHERE o.ORDER_STATUS = 'delivered'
+        AND o.ORDER_DELIVERED_CUSTOMER_DATE IS NOT NULL
+    )
+    SELECT state,
+           100.0 * SUM(CASE WHEN is_late THEN 1 ELSE 0 END) / COUNT(*) AS late_rate_pct
+    FROM order_state
+    GROUP BY state
+    ORDER BY late_rate_pct DESC, state
+  example_question: "What is the late-delivery rate (%) by customer state, for states with the highest rate first?"
+  example_sql: |
+    SELECT c.CUSTOMER_STATE AS state,
+           100.0 * SUM(CASE WHEN o.ORDER_DELIVERED_CUSTOMER_DATE > o.ORDER_ESTIMATED_DELIVERY_DATE
+                            THEN 1 ELSE 0 END) / COUNT(*) AS late_rate_pct
+    FROM ORDERS o
+    JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+    WHERE o.ORDER_STATUS = 'delivered'
+      AND o.ORDER_DELIVERED_CUSTOMER_DATE IS NOT NULL
+    GROUP BY c.CUSTOMER_STATE
+    ORDER BY late_rate_pct DESC, state
+  notes: "Distinct (seller_state, ORDER_ID) to avoid item-level double counting, then conditional rate per state. Timestamp-based lateness."
+
+- id: olist__seller_revenue_concentration
+  dataset: olist
+  question: "What share (%) of total business volume comes from the top 10 sellers by business volume?"
+  difficulty: hard_multistep
+  uses: [business_volume]
+  required_facts:
+    - "Business volume = SUM(ORDER_ITEMS.PRICE) over delivered orders (join ORDER_ITEMS to ORDERS, ORDER_STATUS = 'delivered'); freight excluded; attribute to a seller via ORDER_ITEMS.SELLER_ID."
+    - "Rank sellers by BV descending and take the top 10."
+    - "Concentration = (sum of the top-10 sellers' BV) / (grand-total BV across all sellers), x100; the denominator is the company-wide total, not just the top 10."
+  gap: false
+  gold_sql: |
+    WITH per_seller AS (
+      SELECT oi.SELLER_ID, SUM(oi.PRICE) AS bv
+      FROM ORDER_ITEMS oi
+      JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+      WHERE o.ORDER_STATUS = 'delivered'
+      GROUP BY oi.SELLER_ID
+    ),
+    ranked AS (
+      SELECT SELLER_ID, bv,
+             ROW_NUMBER() OVER (ORDER BY bv DESC, SELLER_ID) AS rn,
+             SUM(bv) OVER () AS total_bv
+      FROM per_seller
+    )
+    SELECT 100.0 * SUM(bv) FILTER (WHERE rn <= 10) / MAX(total_bv) AS top10_share_pct
+    FROM ranked
+  example_question: "What share (%) of total business volume comes from the top 10 product categories by business volume?"
+  example_sql: |
+    WITH per_cat AS (
+      SELECT COALESCE(t.PRODUCT_CATEGORY_NAME_ENGLISH, p.PRODUCT_CATEGORY_NAME) AS category,
+             SUM(oi.PRICE) AS bv
+      FROM ORDER_ITEMS oi
+      JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+      JOIN PRODUCTS p ON oi.PRODUCT_ID = p.PRODUCT_ID
+      LEFT JOIN PRODUCT_CATEGORY_NAME_TRANSLATION t
+        ON p.PRODUCT_CATEGORY_NAME = t.PRODUCT_CATEGORY_NAME
+      WHERE o.ORDER_STATUS = 'delivered'
+      GROUP BY category
+    ),
+    ranked AS (
+      SELECT category, bv,
+             ROW_NUMBER() OVER (ORDER BY bv DESC, category) AS rn,
+             SUM(bv) OVER () AS total_bv
+      FROM per_cat
+    )
+    SELECT 100.0 * SUM(bv) FILTER (WHERE rn <= 10) / MAX(total_bv) AS top10_share_pct
+    FROM ranked
+  notes: "Per-seller BV, rank, then top-10 sum over grand total via a window total. Tie-break on SELLER_ID."
+
+- id: olist__cohort_revenue_by_acquisition_month
+  dataset: olist
+  question: "For each acquisition-month cohort (customers grouped by the month of their first ever order), how many customers are in the cohort and what is their total lifetime business volume?"
+  difficulty: hard_multistep
+  uses: [business_volume]
+  required_facts:
+    - "A customer = CUSTOMERS.CUSTOMER_UNIQUE_ID (a real person), never the per-order CUSTOMER_ID; join ORDERS.CUSTOMER_ID = CUSTOMERS.CUSTOMER_ID first."
+    - "A person's acquisition month = the calendar month of their first-ever order (MIN(ORDER_PURCHASE_TIMESTAMP) per CUSTOMER_UNIQUE_ID, bucketed to month); assign each person to exactly one cohort."
+    - "Cohort lifetime business volume = SUM(ORDER_ITEMS.PRICE) over delivered orders for ALL of that cohort's people's orders (not just the acquisition month); freight excluded."
+  gap: false
+  gold_sql: |
+    WITH firsts AS (
+      SELECT c.CUSTOMER_UNIQUE_ID AS person,
+             date_trunc('month', MIN(o.ORDER_PURCHASE_TIMESTAMP)) AS cohort_month
+      FROM ORDERS o
+      JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+      GROUP BY c.CUSTOMER_UNIQUE_ID
+    ),
+    person_orders AS (
+      SELECT c.CUSTOMER_UNIQUE_ID AS person, oi.PRICE
+      FROM ORDER_ITEMS oi
+      JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+      JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+      WHERE o.ORDER_STATUS = 'delivered'
+    )
+    SELECT f.cohort_month,
+           COUNT(DISTINCT f.person) AS cohort_customers,
+           COALESCE(SUM(po.PRICE), 0) AS cohort_lifetime_bv
+    FROM firsts f
+    LEFT JOIN person_orders po ON po.person = f.person
+    GROUP BY f.cohort_month
+    ORDER BY f.cohort_month
+  example_question: "For each acquisition-month cohort, how many customers are in the cohort and how many delivered orders have they placed in total?"
+  example_sql: |
+    WITH firsts AS (
+      SELECT c.CUSTOMER_UNIQUE_ID AS person,
+             date_trunc('month', MIN(o.ORDER_PURCHASE_TIMESTAMP)) AS cohort_month
+      FROM ORDERS o
+      JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+      GROUP BY c.CUSTOMER_UNIQUE_ID
+    ),
+    person_orders AS (
+      SELECT c.CUSTOMER_UNIQUE_ID AS person, o.ORDER_ID
+      FROM ORDERS o
+      JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+      WHERE o.ORDER_STATUS = 'delivered'
+    )
+    SELECT f.cohort_month,
+           COUNT(DISTINCT f.person) AS cohort_customers,
+           COUNT(DISTINCT po.ORDER_ID) AS cohort_total_orders
+    FROM firsts f
+    LEFT JOIN person_orders po ON po.person = f.person
+    GROUP BY f.cohort_month
+    ORDER BY f.cohort_month
+  notes: "Per-person first-order month assigns the cohort (keyed by CUSTOMER_UNIQUE_ID), then join back to ALL their delivered orders for lifetime BV. Cohort months span 2024-04..2026-05."
+
+- id: olist__payment_type_share
+  dataset: olist
+  question: "For each payment type, what is the total amount paid and its share (%) of all amount paid?"
+  difficulty: hard_multistep
+  uses: [business_volume]
+  required_facts:
+    - "Amount paid lives on ORDER_PAYMENTS.PAYMENT_VALUE (one row per order, payment sequence); this is what the customer paid incl. installments/freight, distinct from business volume (SUM(PRICE))."
+    - "Payment type = ORDER_PAYMENTS.PAYMENT_TYPE (credit_card, boleto, voucher, debit_card, not_defined)."
+    - "Share of total = a type's amount-paid divided by the grand total of all amount paid, x100 (e.g. a window SUM over all types)."
+  gap: false
+  gold_sql: |
+    SELECT PAYMENT_TYPE,
+           SUM(PAYMENT_VALUE) AS amount_paid,
+           100.0 * SUM(PAYMENT_VALUE) / SUM(SUM(PAYMENT_VALUE)) OVER () AS pct_of_total
+    FROM ORDER_PAYMENTS
+    GROUP BY PAYMENT_TYPE
+    ORDER BY amount_paid DESC, PAYMENT_TYPE
+  example_question: "For each payment type, how many payment records are there and their share (%) of all records?"
+  example_sql: |
+    SELECT PAYMENT_TYPE,
+           COUNT(*) AS records,
+           100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS pct_of_total
+    FROM ORDER_PAYMENTS
+    GROUP BY PAYMENT_TYPE
+    ORDER BY records DESC, PAYMENT_TYPE
+  notes: "PAYMENT_VALUE (not PRICE) for payment-specific questions; window SUM-over-all for the share. credit_card dominates (~three quarters)."

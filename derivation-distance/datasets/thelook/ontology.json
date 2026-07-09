@@ -1,0 +1,1152 @@
+{
+  "domains": [
+    {
+      "path": "",
+      "display_name": "theLook e-commerce",
+      "description": "Synthetic online retailer. Orders, items, products, inventory, fulfillment, users, and web events.",
+      "context_md": "theLook is a synthetic online retailer: registered users place orders, each order contains one or more order items, items map to inventory and products, and products ship from distribution centers. Web events capture browsing.\n\nGlobal rules:\n- **Currency is USD.** All money columns (`SALE_PRICE`, `COST`, `RETAIL_PRICE`) are US dollars.\n- **Revenue** is the sum of `ORDER_ITEMS.SALE_PRICE` for items not cancelled and not returned. Cancelled and returned items do not count.\n- A **completed order** is an order whose `STATUS = 'Complete'`.\n- A **customer** is a user who has placed at least one order. A user who only browsed is not a customer.\n- Identity: users are keyed by `USERS.ID` (= `ORDERS.USER_ID` = `ORDER_ITEMS.USER_ID`).\n- **Return rate** is item-grain: returned items divided by all items, where an item is returned when `ORDER_ITEMS.RETURNED_AT` is not null (equivalently item `STATUS = 'Returned'`). Only use order-level returns when a question explicitly asks about orders.\n- Products are identified by `PRODUCTS.ID`; product names are not unique. Include the product id when reporting per-product results.\n- `USERS.STATE` is populated for users of every country; questions 'by state' cover all countries unless the question restricts to one.\n- Grain trap: revenue lives at the order-item level. Count orders with `COUNT(DISTINCT ORDER_ID)`, never `COUNT(*)` over order items.\n\nDomains: [sales](sales), [catalog](catalog), [fulfillment](fulfillment), [users](users), [web](web)."
+    },
+    {
+      "path": "sales",
+      "display_name": "Sales",
+      "description": "Orders and order items: the transactional core.",
+      "context_md": "Orders and the items inside them.\n\n- `ORDERS`: one row per order. `STATUS` moves through Processing, Shipped, Complete, Cancelled, Returned. `RETURNED_AT` is set when the order came back.\n- `ORDER_ITEMS`: one row per item sold; `SALE_PRICE` is the per-item revenue. This is the grain for revenue.\n\nChild: [measuring sales](sales/measuring)."
+    },
+    {
+      "path": "sales/measuring",
+      "display_name": "Measuring sales",
+      "description": "How to turn orders and items into revenue, AOV, and returns.",
+      "context_md": "Definitions used across the business:\n- **Revenue**: `SUM(SALE_PRICE)` over order items not cancelled and not returned.\n- **Average order value**: revenue divided by distinct orders.\n- **Return rate**: share of orders with a non-null `RETURNED_AT`.\n- **Total spend**: a customer's lifetime revenue (revenue grouped by user)."
+    },
+    {
+      "path": "catalog",
+      "display_name": "Catalog",
+      "description": "Products and the physical inventory units sold.",
+      "context_md": "- `PRODUCTS`: the catalog. `RETAIL_PRICE` is list price, `COST` is unit cost; margin is the difference.\n- `INVENTORY_ITEMS`: individual physical units. Each order item is fulfilled by one inventory item. `SOLD_AT` marks when a unit was sold."
+    },
+    {
+      "path": "fulfillment",
+      "display_name": "Fulfillment",
+      "description": "Distribution centers and shipping timeline.",
+      "context_md": "- `DISTRIBUTION_CENTERS`: the warehouses products ship from (with lat/long).\n- Shipping timeline lives on `ORDERS`/`ORDER_ITEMS`: `CREATED_AT` -> `SHIPPED_AT` -> `DELIVERED_AT`, and `RETURNED_AT` for returns."
+    },
+    {
+      "path": "users",
+      "display_name": "Users",
+      "description": "The registered user base; customers are users who ordered.",
+      "context_md": "`USERS`: one row per registered user, with demographics, location, and `TRAFFIC_SOURCE` (how they were acquired). A user becomes a **customer** once they place an order."
+    },
+    {
+      "path": "web",
+      "display_name": "Web events",
+      "description": "Clickstream: sessions, page views, and traffic sources.",
+      "context_md": "`EVENTS`: one row per web event, grouped into sessions by `SESSION_ID` and ordered by `SEQUENCE_NUMBER`. `EVENT_TYPE` and `URI` describe the action. Note: the events table is large and is not bundled in this repo's `data/`; load it from the BigQuery public dataset if needed."
+    }
+  ],
+  "tables": [
+    {
+      "schema_name": "THELOOK_ECOMMERCE",
+      "table_name": "ORDERS",
+      "domain_path": "sales",
+      "description": "One row per order placed by a user.",
+      "synonyms": [
+        "orders",
+        "purchases"
+      ],
+      "grain": [
+        "ORDER_ID"
+      ],
+      "sql": null,
+      "lineage": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 124923,
+      "columns": [
+        {
+          "name": "ORDER_ID",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "description": "Unique order identifier.",
+          "unit": null,
+          "synonyms": [
+            "order id"
+          ],
+          "source": "manual",
+          "ordinal": 1
+        },
+        {
+          "name": "USER_ID",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "description": "The user who placed the order. Joins to USERS.ID.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 2
+        },
+        {
+          "name": "STATUS",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Order status: Processing, Shipped, Complete, Cancelled, Returned.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 3
+        },
+        {
+          "name": "GENDER",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Gender recorded on the order.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 4
+        },
+        {
+          "name": "CREATED_AT",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "description": "When the order was placed.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 5
+        },
+        {
+          "name": "RETURNED_AT",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "description": "When the order was returned, if it was. Null otherwise.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 6
+        },
+        {
+          "name": "SHIPPED_AT",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "description": "When the order shipped.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 7
+        },
+        {
+          "name": "DELIVERED_AT",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "description": "When the order was delivered.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 8
+        },
+        {
+          "name": "NUM_OF_ITEM",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "description": "Number of items in the order.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 9
+        }
+      ]
+    },
+    {
+      "schema_name": "THELOOK_ECOMMERCE",
+      "table_name": "ORDER_ITEMS",
+      "domain_path": "sales",
+      "description": "One row per item sold within an order. The grain for revenue.",
+      "synonyms": [
+        "order items",
+        "line items",
+        "sales"
+      ],
+      "grain": [
+        "ID"
+      ],
+      "sql": null,
+      "lineage": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 180952,
+      "columns": [
+        {
+          "name": "ID",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "description": "Unique order-item identifier.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 1
+        },
+        {
+          "name": "ORDER_ID",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "description": "The order this item belongs to. Joins to ORDERS.ORDER_ID.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 2
+        },
+        {
+          "name": "USER_ID",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "description": "The buyer. Joins to USERS.ID.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 3
+        },
+        {
+          "name": "PRODUCT_ID",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "description": "The product. Joins to PRODUCTS.ID.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 4
+        },
+        {
+          "name": "INVENTORY_ITEM_ID",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "description": "The physical unit fulfilled. Joins to INVENTORY_ITEMS.ID.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 5
+        },
+        {
+          "name": "STATUS",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Item status: Processing, Shipped, Complete, Cancelled, Returned.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 6
+        },
+        {
+          "name": "CREATED_AT",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "description": "When the item was ordered.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 7
+        },
+        {
+          "name": "SHIPPED_AT",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "description": "When the item shipped.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 8
+        },
+        {
+          "name": "DELIVERED_AT",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "description": "When the item was delivered.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 9
+        },
+        {
+          "name": "RETURNED_AT",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "description": "When the item was returned, if it was.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 10
+        },
+        {
+          "name": "SALE_PRICE",
+          "data_type": "FLOAT",
+          "nullable": true,
+          "description": "Per-item sale price (revenue), in USD. The basis of revenue: sum it over items that were not cancelled and not returned (STATUS NOT IN ('Cancelled','Returned')) per the revenue metric; cancelled and returned items do not count.",
+          "unit": "USD",
+          "synonyms": [
+            "price",
+            "revenue"
+          ],
+          "source": "manual",
+          "ordinal": 11
+        }
+      ]
+    },
+    {
+      "schema_name": "THELOOK_ECOMMERCE",
+      "table_name": "PRODUCTS",
+      "domain_path": "catalog",
+      "description": "The product catalog.",
+      "synonyms": [
+        "products",
+        "catalog",
+        "items"
+      ],
+      "grain": [
+        "ID"
+      ],
+      "sql": null,
+      "lineage": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 29120,
+      "columns": [
+        {
+          "name": "ID",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "description": "Unique product identifier.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 1
+        },
+        {
+          "name": "COST",
+          "data_type": "FLOAT",
+          "nullable": true,
+          "description": "Unit cost to the retailer. USD.",
+          "unit": "USD",
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 2
+        },
+        {
+          "name": "CATEGORY",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Product category.",
+          "unit": null,
+          "synonyms": [
+            "category"
+          ],
+          "source": "manual",
+          "ordinal": 3
+        },
+        {
+          "name": "NAME",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Product name.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 4
+        },
+        {
+          "name": "BRAND",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Product brand.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 5
+        },
+        {
+          "name": "RETAIL_PRICE",
+          "data_type": "FLOAT",
+          "nullable": true,
+          "description": "List/retail price. USD.",
+          "unit": "USD",
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 6
+        },
+        {
+          "name": "DEPARTMENT",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Department (e.g. Men, Women).",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 7
+        },
+        {
+          "name": "SKU",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Stock keeping unit.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 8
+        },
+        {
+          "name": "DISTRIBUTION_CENTER_ID",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "description": "Home distribution center. Joins to DISTRIBUTION_CENTERS.ID.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 9
+        }
+      ]
+    },
+    {
+      "schema_name": "THELOOK_ECOMMERCE",
+      "table_name": "INVENTORY_ITEMS",
+      "domain_path": "catalog",
+      "description": "Individual physical units of stock.",
+      "synonyms": [
+        "inventory",
+        "stock units"
+      ],
+      "grain": [
+        "ID"
+      ],
+      "sql": null,
+      "lineage": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 487901,
+      "columns": [
+        {
+          "name": "ID",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "description": "Unique inventory-item identifier.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 1
+        },
+        {
+          "name": "PRODUCT_ID",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "description": "The product. Joins to PRODUCTS.ID.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 2
+        },
+        {
+          "name": "CREATED_AT",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "description": "When the unit entered inventory.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 3
+        },
+        {
+          "name": "SOLD_AT",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "description": "When the unit was sold, if it was.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 4
+        },
+        {
+          "name": "COST",
+          "data_type": "FLOAT",
+          "nullable": true,
+          "description": "Unit cost. USD.",
+          "unit": "USD",
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 5
+        },
+        {
+          "name": "PRODUCT_CATEGORY",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Denormalized product category.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 6
+        },
+        {
+          "name": "PRODUCT_NAME",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Denormalized product name.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 7
+        },
+        {
+          "name": "PRODUCT_BRAND",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Denormalized product brand.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 8
+        },
+        {
+          "name": "PRODUCT_RETAIL_PRICE",
+          "data_type": "FLOAT",
+          "nullable": true,
+          "description": "Denormalized retail price. USD.",
+          "unit": "USD",
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 9
+        },
+        {
+          "name": "PRODUCT_DEPARTMENT",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Denormalized department.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 10
+        },
+        {
+          "name": "PRODUCT_SKU",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Denormalized SKU.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 11
+        },
+        {
+          "name": "PRODUCT_DISTRIBUTION_CENTER_ID",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "description": "Distribution center. Joins to DISTRIBUTION_CENTERS.ID.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 12
+        }
+      ]
+    },
+    {
+      "schema_name": "THELOOK_ECOMMERCE",
+      "table_name": "DISTRIBUTION_CENTERS",
+      "domain_path": "fulfillment",
+      "description": "Warehouses products ship from.",
+      "synonyms": [
+        "distribution centers",
+        "warehouses",
+        "DCs"
+      ],
+      "grain": [
+        "ID"
+      ],
+      "sql": null,
+      "lineage": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 10,
+      "columns": [
+        {
+          "name": "ID",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "description": "Unique distribution-center identifier.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 1
+        },
+        {
+          "name": "NAME",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Distribution center name (city).",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 2
+        },
+        {
+          "name": "LATITUDE",
+          "data_type": "FLOAT",
+          "nullable": true,
+          "description": "Latitude.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 3
+        },
+        {
+          "name": "LONGITUDE",
+          "data_type": "FLOAT",
+          "nullable": true,
+          "description": "Longitude.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 4
+        }
+      ]
+    },
+    {
+      "schema_name": "THELOOK_ECOMMERCE",
+      "table_name": "USERS",
+      "domain_path": "users",
+      "description": "One row per registered user.",
+      "synonyms": [
+        "users",
+        "members",
+        "customers",
+        "accounts"
+      ],
+      "grain": [
+        "ID"
+      ],
+      "sql": null,
+      "lineage": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 100000,
+      "columns": [
+        {
+          "name": "ID",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "description": "Unique user identifier.",
+          "unit": null,
+          "synonyms": [
+            "user id",
+            "customer id"
+          ],
+          "source": "manual",
+          "ordinal": 1
+        },
+        {
+          "name": "FIRST_NAME",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "First name.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 2
+        },
+        {
+          "name": "LAST_NAME",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Last name.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 3
+        },
+        {
+          "name": "EMAIL",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Email address.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 4
+        },
+        {
+          "name": "AGE",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "description": "Age in years.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 5
+        },
+        {
+          "name": "GENDER",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Gender.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 6
+        },
+        {
+          "name": "STATE",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "State/region.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 7
+        },
+        {
+          "name": "STREET_ADDRESS",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Street address.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 8
+        },
+        {
+          "name": "POSTAL_CODE",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Postal code.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 9
+        },
+        {
+          "name": "CITY",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "City.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 10
+        },
+        {
+          "name": "COUNTRY",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Country.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 11
+        },
+        {
+          "name": "LATITUDE",
+          "data_type": "FLOAT",
+          "nullable": true,
+          "description": "Latitude.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 12
+        },
+        {
+          "name": "LONGITUDE",
+          "data_type": "FLOAT",
+          "nullable": true,
+          "description": "Longitude.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 13
+        },
+        {
+          "name": "TRAFFIC_SOURCE",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Acquisition channel (Search, Organic, Email, Display, Facebook).",
+          "unit": null,
+          "synonyms": [
+            "channel",
+            "acquisition source"
+          ],
+          "source": "manual",
+          "ordinal": 14
+        },
+        {
+          "name": "CREATED_AT",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "description": "When the user registered.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 15
+        }
+      ]
+    },
+    {
+      "schema_name": "THELOOK_ECOMMERCE",
+      "table_name": "EVENTS",
+      "domain_path": "web",
+      "description": "One row per web event (clickstream). Large; not bundled in data/.",
+      "synonyms": [
+        "events",
+        "clickstream",
+        "web events"
+      ],
+      "grain": [
+        "ID"
+      ],
+      "sql": null,
+      "lineage": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 2420738,
+      "columns": [
+        {
+          "name": "ID",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "description": "Unique event identifier.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 1
+        },
+        {
+          "name": "USER_ID",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "description": "The user, if known. Joins to USERS.ID.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 2
+        },
+        {
+          "name": "SEQUENCE_NUMBER",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "description": "Order of the event within its session.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 3
+        },
+        {
+          "name": "SESSION_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Session identifier.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 4
+        },
+        {
+          "name": "CREATED_AT",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "description": "When the event occurred.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 5
+        },
+        {
+          "name": "IP_ADDRESS",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "IP address.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 6
+        },
+        {
+          "name": "CITY",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "City.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 7
+        },
+        {
+          "name": "STATE",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "State/region.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 8
+        },
+        {
+          "name": "POSTAL_CODE",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Postal code.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 9
+        },
+        {
+          "name": "BROWSER",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Browser.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 10
+        },
+        {
+          "name": "TRAFFIC_SOURCE",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Traffic source for the session.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 11
+        },
+        {
+          "name": "URI",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Page path.",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 12
+        },
+        {
+          "name": "EVENT_TYPE",
+          "data_type": "TEXT",
+          "nullable": true,
+          "description": "Event type (e.g. cart, purchase, product, department).",
+          "unit": null,
+          "synonyms": [],
+          "source": "manual",
+          "ordinal": 13
+        }
+      ]
+    }
+  ],
+  "joins": [
+    {
+      "from_schema": "THELOOK_ECOMMERCE",
+      "from_table": "ORDER_ITEMS",
+      "to_schema": "THELOOK_ECOMMERCE",
+      "to_table": "ORDERS",
+      "condition_sql": "THELOOK_ECOMMERCE.ORDER_ITEMS.ORDER_ID = THELOOK_ECOMMERCE.ORDERS.ORDER_ID",
+      "column_pairs": [],
+      "source": "manual",
+      "description": "[many_to_one] Each order item belongs to one order."
+    },
+    {
+      "from_schema": "THELOOK_ECOMMERCE",
+      "from_table": "ORDER_ITEMS",
+      "to_schema": "THELOOK_ECOMMERCE",
+      "to_table": "USERS",
+      "condition_sql": "THELOOK_ECOMMERCE.ORDER_ITEMS.USER_ID = THELOOK_ECOMMERCE.USERS.ID",
+      "column_pairs": [],
+      "source": "manual",
+      "description": "[many_to_one] Each order item was bought by one user."
+    },
+    {
+      "from_schema": "THELOOK_ECOMMERCE",
+      "from_table": "ORDER_ITEMS",
+      "to_schema": "THELOOK_ECOMMERCE",
+      "to_table": "PRODUCTS",
+      "condition_sql": "THELOOK_ECOMMERCE.ORDER_ITEMS.PRODUCT_ID = THELOOK_ECOMMERCE.PRODUCTS.ID",
+      "column_pairs": [],
+      "source": "manual",
+      "description": "[many_to_one] Each order item is one product."
+    },
+    {
+      "from_schema": "THELOOK_ECOMMERCE",
+      "from_table": "ORDER_ITEMS",
+      "to_schema": "THELOOK_ECOMMERCE",
+      "to_table": "INVENTORY_ITEMS",
+      "condition_sql": "THELOOK_ECOMMERCE.ORDER_ITEMS.INVENTORY_ITEM_ID = THELOOK_ECOMMERCE.INVENTORY_ITEMS.ID",
+      "column_pairs": [],
+      "source": "manual",
+      "description": "[many_to_one] Each order item is fulfilled by one inventory unit."
+    },
+    {
+      "from_schema": "THELOOK_ECOMMERCE",
+      "from_table": "ORDERS",
+      "to_schema": "THELOOK_ECOMMERCE",
+      "to_table": "USERS",
+      "condition_sql": "THELOOK_ECOMMERCE.ORDERS.USER_ID = THELOOK_ECOMMERCE.USERS.ID",
+      "column_pairs": [],
+      "source": "manual",
+      "description": "[many_to_one] Each order was placed by one user."
+    },
+    {
+      "from_schema": "THELOOK_ECOMMERCE",
+      "from_table": "INVENTORY_ITEMS",
+      "to_schema": "THELOOK_ECOMMERCE",
+      "to_table": "PRODUCTS",
+      "condition_sql": "THELOOK_ECOMMERCE.INVENTORY_ITEMS.PRODUCT_ID = THELOOK_ECOMMERCE.PRODUCTS.ID",
+      "column_pairs": [],
+      "source": "manual",
+      "description": "[many_to_one] Each inventory unit is one product."
+    },
+    {
+      "from_schema": "THELOOK_ECOMMERCE",
+      "from_table": "INVENTORY_ITEMS",
+      "to_schema": "THELOOK_ECOMMERCE",
+      "to_table": "DISTRIBUTION_CENTERS",
+      "condition_sql": "THELOOK_ECOMMERCE.INVENTORY_ITEMS.PRODUCT_DISTRIBUTION_CENTER_ID = THELOOK_ECOMMERCE.DISTRIBUTION_CENTERS.ID",
+      "column_pairs": [],
+      "source": "manual",
+      "description": "[many_to_one] Each inventory unit ships from one distribution center."
+    },
+    {
+      "from_schema": "THELOOK_ECOMMERCE",
+      "from_table": "PRODUCTS",
+      "to_schema": "THELOOK_ECOMMERCE",
+      "to_table": "DISTRIBUTION_CENTERS",
+      "condition_sql": "THELOOK_ECOMMERCE.PRODUCTS.DISTRIBUTION_CENTER_ID = THELOOK_ECOMMERCE.DISTRIBUTION_CENTERS.ID",
+      "column_pairs": [],
+      "source": "manual",
+      "description": "[many_to_one] Each product has a home distribution center."
+    },
+    {
+      "from_schema": "THELOOK_ECOMMERCE",
+      "from_table": "EVENTS",
+      "to_schema": "THELOOK_ECOMMERCE",
+      "to_table": "USERS",
+      "condition_sql": "THELOOK_ECOMMERCE.EVENTS.USER_ID = THELOOK_ECOMMERCE.USERS.ID",
+      "column_pairs": [],
+      "source": "manual",
+      "description": "[many_to_one] Each web event belongs to one user (when known)."
+    }
+  ],
+  "metrics": [
+    {
+      "name": "revenue",
+      "display_name": "Revenue",
+      "expression": "SUM(\"SALE_PRICE\")",
+      "domain_path": "sales/measuring",
+      "description": "Total revenue: sum of order-item sale price for items not cancelled and not returned. USD.",
+      "table_schema": "THELOOK_ECOMMERCE",
+      "table_name": "ORDER_ITEMS",
+      "filters": "THELOOK_ECOMMERCE.ORDER_ITEMS.STATUS NOT IN ('Cancelled', 'Returned')",
+      "unit": "USD",
+      "synonyms": [
+        "sales",
+        "gmv",
+        "total revenue"
+      ],
+      "notes": null,
+      "precomputed_in": null
+    },
+    {
+      "name": "orders",
+      "display_name": "Orders",
+      "expression": "COUNT(DISTINCT \"ORDER_ID\")",
+      "domain_path": "sales/measuring",
+      "description": "Number of distinct orders.",
+      "table_schema": "THELOOK_ECOMMERCE",
+      "table_name": "ORDERS",
+      "filters": null,
+      "unit": null,
+      "synonyms": [
+        "order count",
+        "number of orders"
+      ],
+      "notes": null,
+      "precomputed_in": null
+    },
+    {
+      "name": "completed_orders",
+      "display_name": "Completed orders",
+      "expression": "COUNT(DISTINCT \"ORDER_ID\")",
+      "domain_path": "sales/measuring",
+      "description": "Distinct orders with STATUS = 'Complete'.",
+      "table_schema": "THELOOK_ECOMMERCE",
+      "table_name": "ORDERS",
+      "filters": "THELOOK_ECOMMERCE.ORDERS.STATUS = 'Complete'",
+      "unit": null,
+      "synonyms": [
+        "complete orders"
+      ],
+      "notes": null,
+      "precomputed_in": null
+    },
+    {
+      "name": "average_order_value",
+      "display_name": "Average order value",
+      "expression": "SUM(\"SALE_PRICE\") / NULLIF(COUNT(DISTINCT \"ORDER_ID\"), 0)",
+      "domain_path": "sales/measuring",
+      "description": "Revenue divided by distinct orders. USD.",
+      "table_schema": "THELOOK_ECOMMERCE",
+      "table_name": "ORDER_ITEMS",
+      "filters": "THELOOK_ECOMMERCE.ORDER_ITEMS.STATUS NOT IN ('Cancelled', 'Returned')",
+      "unit": "USD",
+      "synonyms": [
+        "AOV",
+        "average basket"
+      ],
+      "notes": null,
+      "precomputed_in": null
+    },
+    {
+      "name": "return_rate",
+      "display_name": "Return rate",
+      "expression": "COUNT(DISTINCT CASE WHEN \"RETURNED_AT\" IS NOT NULL THEN \"ORDER_ID\" END) * 1.0 / NULLIF(COUNT(DISTINCT \"ORDER_ID\"), 0)",
+      "domain_path": "sales/measuring",
+      "description": "Share of orders that were returned (non-null RETURNED_AT). Ratio between 0 and 1.",
+      "table_schema": "THELOOK_ECOMMERCE",
+      "table_name": "ORDERS",
+      "filters": null,
+      "unit": "ratio",
+      "synonyms": [
+        "returns rate",
+        "% returned"
+      ],
+      "notes": null,
+      "precomputed_in": null
+    },
+    {
+      "name": "customers",
+      "display_name": "Customers",
+      "expression": "COUNT(DISTINCT \"USER_ID\")",
+      "domain_path": "users",
+      "description": "Distinct users who have placed at least one order.",
+      "table_schema": "THELOOK_ECOMMERCE",
+      "table_name": "ORDERS",
+      "filters": null,
+      "unit": null,
+      "synonyms": [
+        "buyers",
+        "number of customers"
+      ],
+      "notes": null,
+      "precomputed_in": null
+    },
+    {
+      "name": "total_spend",
+      "display_name": "Customer total spend",
+      "expression": "SUM(\"SALE_PRICE\")",
+      "domain_path": "sales/measuring",
+      "description": "A customer's lifetime revenue: revenue grouped by USER_ID. USD.",
+      "table_schema": "THELOOK_ECOMMERCE",
+      "table_name": "ORDER_ITEMS",
+      "filters": "THELOOK_ECOMMERCE.ORDER_ITEMS.STATUS NOT IN ('Cancelled', 'Returned')",
+      "unit": "USD",
+      "synonyms": [
+        "lifetime value",
+        "LTV",
+        "spend per customer"
+      ],
+      "notes": null,
+      "precomputed_in": null
+    }
+  ],
+  "ai_context": "theLook is a synthetic online retailer: registered users place orders, each order contains one or more order items, items map to inventory and products, and products ship from distribution centers. Web events capture browsing.\n\nGlobal rules:\n- **Currency is USD.** All money columns (`SALE_PRICE`, `COST`, `RETAIL_PRICE`) are US dollars.\n- **Revenue** is the sum of `ORDER_ITEMS.SALE_PRICE` for items not cancelled and not returned. Cancelled and returned items do not count.\n- A **completed order** is an order whose `STATUS = 'Complete'`.\n- A **customer** is a user who has placed at least one order. A user who only browsed is not a customer.\n- Identity: users are keyed by `USERS.ID` (= `ORDERS.USER_ID` = `ORDER_ITEMS.USER_ID`).\n- **Return rate** is item-grain: returned items divided by all items, where an item is returned when `ORDER_ITEMS.RETURNED_AT` is not null (equivalently item `STATUS = 'Returned'`). Only use order-level returns when a question explicitly asks about orders.\n- Products are identified by `PRODUCTS.ID`; product names are not unique. Include the product id when reporting per-product results.\n- `USERS.STATE` is populated for users of every country; questions 'by state' cover all countries unless the question restricts to one.\n- Grain trap: revenue lives at the order-item level. Count orders with `COUNT(DISTINCT ORDER_ID)`, never `COUNT(*)` over order items.\n\nDomains: [sales](sales), [catalog](catalog), [fulfillment](fulfillment), [users](users), [web](web)."
+}

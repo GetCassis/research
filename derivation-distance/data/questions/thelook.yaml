@@ -1,0 +1,720 @@
+# theLook e-commerce question set for the derivation-distance study.
+# All questions are derivation questions (gap: false). theLook has no planted
+# completeness gap. Date windows anchor to the data's max order date 2026-04-25
+# (never CURRENT_DATE).
+# Difficulty strata: single_agg, multi_join, date_window, multi_step (~3 each),
+# then hard_multistep (~11).
+#
+# Core convention (from the ontology): REVENUE = SUM(ORDER_ITEMS.SALE_PRICE)
+# over items whose STATUS is NOT IN ('Cancelled','Returned'). That status filter
+# is load-bearing and easy to miss, so it is a required_fact on every revenue cut.
+
+# ---- single_agg (3) ---------------------------------------------------------
+
+- id: thelook__total_revenue
+  dataset: thelook
+  question: "What is our total revenue?"
+  difficulty: single_agg
+  uses: [revenue]
+  required_facts:
+    - "Revenue = SUM(ORDER_ITEMS.SALE_PRICE) (the per-item sale price, not PRODUCTS.RETAIL_PRICE which is list price)."
+    - "Revenue counts only items not cancelled and not returned: filter ORDER_ITEMS.STATUS NOT IN ('Cancelled','Returned')."
+  gap: false
+  gold_sql: |
+    SELECT SUM(SALE_PRICE) AS revenue
+    FROM ORDER_ITEMS
+    WHERE STATUS NOT IN ('Cancelled', 'Returned')
+  example_question: "How many distinct orders have we had in total?"
+  example_sql: |
+    SELECT COUNT(DISTINCT ORDER_ID) AS order_count
+    FROM ORDERS
+  notes: "Revenue is SALE_PRICE summed over non-cancelled, non-returned items. Expect 8067638.53."
+
+- id: thelook__completed_order_count
+  dataset: thelook
+  question: "How many completed orders do we have?"
+  difficulty: single_agg
+  uses: [completed_orders]
+  required_facts:
+    - "A completed order has ORDERS.STATUS = 'Complete' (one of Processing/Shipped/Complete/Cancelled/Returned)."
+    - "Count distinct orders: COUNT(DISTINCT ORDER_ID)."
+  gap: false
+  gold_sql: |
+    SELECT COUNT(DISTINCT ORDER_ID) AS completed_orders
+    FROM ORDERS
+    WHERE STATUS = 'Complete'
+  example_question: "How many distinct orders have we had in total?"
+  example_sql: |
+    SELECT COUNT(DISTINCT ORDER_ID) AS order_count
+    FROM ORDERS
+  notes: "STATUS = 'Complete' exactly. Expect 31028."
+
+- id: thelook__average_order_value
+  dataset: thelook
+  question: "What is our average order value?"
+  difficulty: single_agg
+  uses: [average_order_value]
+  required_facts:
+    - "Revenue = SUM(ORDER_ITEMS.SALE_PRICE) over items NOT IN ('Cancelled','Returned')."
+    - "Average order value = revenue / COUNT(DISTINCT ORDER_ID), not AVG over items (revenue lives at the item grain, orders at the order grain)."
+  gap: false
+  gold_sql: |
+    SELECT SUM(SALE_PRICE) / COUNT(DISTINCT ORDER_ID) AS average_order_value
+    FROM ORDER_ITEMS
+    WHERE STATUS NOT IN ('Cancelled', 'Returned')
+  example_question: "What is our total revenue?"
+  example_sql: |
+    SELECT SUM(SALE_PRICE) AS revenue
+    FROM ORDER_ITEMS
+    WHERE STATUS NOT IN ('Cancelled', 'Returned')
+  notes: "Revenue over distinct orders. Denominator uses all distinct orders touched by the filtered items. Expect ~86.17."
+
+# ---- multi_join (3) ---------------------------------------------------------
+
+- id: thelook__revenue_by_category_top5
+  dataset: thelook
+  question: "What is total revenue by product category, for the top 5 categories?"
+  difficulty: multi_join
+  uses: [revenue]
+  required_facts:
+    - "Revenue = SUM(ORDER_ITEMS.SALE_PRICE) over items NOT IN ('Cancelled','Returned')."
+    - "A product's category is PRODUCTS.CATEGORY; join ORDER_ITEMS.PRODUCT_ID = PRODUCTS.ID for any by-category cut."
+    - "'Top 5 categories' means order by revenue descending and LIMIT 5."
+  gap: false
+  gold_sql: |
+    SELECT p.CATEGORY, SUM(oi.SALE_PRICE) AS revenue
+    FROM ORDER_ITEMS oi
+    JOIN PRODUCTS p ON oi.PRODUCT_ID = p.ID
+    WHERE oi.STATUS NOT IN ('Cancelled', 'Returned')
+    GROUP BY p.CATEGORY
+    ORDER BY revenue DESC
+    LIMIT 5
+  example_question: "What is total revenue by product department?"
+  example_sql: |
+    SELECT p.DEPARTMENT, SUM(oi.SALE_PRICE) AS revenue
+    FROM ORDER_ITEMS oi
+    JOIN PRODUCTS p ON oi.PRODUCT_ID = p.ID
+    WHERE oi.STATUS NOT IN ('Cancelled', 'Returned')
+    GROUP BY p.DEPARTMENT
+    ORDER BY revenue DESC
+  notes: "Join ORDER_ITEMS -> PRODUCTS on PRODUCT_ID = ID. Outerwear & Coats leads."
+
+- id: thelook__top_brands_by_revenue
+  dataset: thelook
+  question: "Which are the top 5 brands by revenue, with their revenue?"
+  difficulty: multi_join
+  uses: [revenue]
+  required_facts:
+    - "Revenue = SUM(ORDER_ITEMS.SALE_PRICE) over items NOT IN ('Cancelled','Returned')."
+    - "A product's brand is PRODUCTS.BRAND; join ORDER_ITEMS.PRODUCT_ID = PRODUCTS.ID."
+    - "'Top 5 brands' means order by revenue descending and LIMIT 5."
+  gap: false
+  gold_sql: |
+    SELECT p.BRAND, SUM(oi.SALE_PRICE) AS revenue
+    FROM ORDER_ITEMS oi
+    JOIN PRODUCTS p ON oi.PRODUCT_ID = p.ID
+    WHERE oi.STATUS NOT IN ('Cancelled', 'Returned')
+    GROUP BY p.BRAND
+    ORDER BY revenue DESC, p.BRAND
+    LIMIT 5
+  example_question: "What is total revenue by product category, for the top 5 categories?"
+  example_sql: |
+    SELECT p.CATEGORY, SUM(oi.SALE_PRICE) AS revenue
+    FROM ORDER_ITEMS oi
+    JOIN PRODUCTS p ON oi.PRODUCT_ID = p.ID
+    WHERE oi.STATUS NOT IN ('Cancelled', 'Returned')
+    GROUP BY p.CATEGORY
+    ORDER BY revenue DESC
+    LIMIT 5
+  notes: "Brand from PRODUCTS via PRODUCT_ID join. Tie-break on BRAND. Calvin Klein leads (~149544.76)."
+
+- id: thelook__top_customers_by_spend
+  dataset: thelook
+  question: "Who are the top 5 customers by total spend, with their spend?"
+  difficulty: multi_join
+  uses: [total_spend]
+  required_facts:
+    - "Total spend = a customer's revenue: SUM(ORDER_ITEMS.SALE_PRICE) over items NOT IN ('Cancelled','Returned'), grouped by user."
+    - "A customer is USERS.ID; the buyer of an item is ORDER_ITEMS.USER_ID (= USERS.ID)."
+    - "Group by USER_ID (not name) so namesakes stay distinct; 'top 5' means order by spend descending and LIMIT 5."
+  gap: false
+  gold_sql: |
+    SELECT u.ID, u.FIRST_NAME, u.LAST_NAME, SUM(oi.SALE_PRICE) AS total_spend
+    FROM ORDER_ITEMS oi
+    JOIN USERS u ON oi.USER_ID = u.ID
+    WHERE oi.STATUS NOT IN ('Cancelled', 'Returned')
+    GROUP BY u.ID, u.FIRST_NAME, u.LAST_NAME
+    ORDER BY total_spend DESC, u.ID
+    LIMIT 5
+  example_question: "Which are the top 5 brands by revenue, with their revenue?"
+  example_sql: |
+    SELECT p.BRAND, SUM(oi.SALE_PRICE) AS revenue
+    FROM ORDER_ITEMS oi
+    JOIN PRODUCTS p ON oi.PRODUCT_ID = p.ID
+    WHERE oi.STATUS NOT IN ('Cancelled', 'Returned')
+    GROUP BY p.BRAND
+    ORDER BY revenue DESC
+    LIMIT 5
+  notes: "Spend grouped by USER_ID. Tie-break on ID for determinism."
+
+# ---- date_window (3) --------------------------------------------------------
+
+- id: thelook__revenue_last_90d
+  dataset: thelook
+  question: "What was our revenue in the last 90 days?"
+  difficulty: date_window
+  uses: [revenue]
+  required_facts:
+    - "Revenue = SUM(ORDER_ITEMS.SALE_PRICE) over items NOT IN ('Cancelled','Returned')."
+    - "An item's date is ORDER_ITEMS.CREATED_AT; 'last 90 days' is the 90 days ending on the snapshot date: CREATED_AT >= snapshot_date - 90 days."
+  gap: false
+  gold_sql: |
+    SELECT SUM(SALE_PRICE) AS revenue_last_90d
+    FROM ORDER_ITEMS
+    WHERE STATUS NOT IN ('Cancelled', 'Returned')
+      AND CREATED_AT >= DATE '2026-04-25' - INTERVAL 90 DAY
+  example_question: "How many orders did we have in the last 90 days?"
+  example_sql: |
+    SELECT COUNT(DISTINCT ORDER_ID) AS order_count_last_90d
+    FROM ORDERS
+    WHERE CREATED_AT >= DATE '2026-04-25' - INTERVAL 90 DAY
+  notes: "Anchor 'today' to 2026-04-25 (data max order date). Window on ORDER_ITEMS.CREATED_AT."
+
+- id: thelook__orders_last_90d
+  dataset: thelook
+  question: "How many orders did we have in the last 90 days?"
+  difficulty: date_window
+  uses: [orders]
+  required_facts:
+    - "Order count = COUNT(DISTINCT ORDER_ID)."
+    - "An order's date is ORDERS.CREATED_AT; 'last 90 days' is CREATED_AT >= snapshot_date - 90 days."
+  gap: false
+  gold_sql: |
+    SELECT COUNT(DISTINCT ORDER_ID) AS order_count_last_90d
+    FROM ORDERS
+    WHERE CREATED_AT >= DATE '2026-04-25' - INTERVAL 90 DAY
+  example_question: "What was our revenue in the last 90 days?"
+  example_sql: |
+    SELECT SUM(SALE_PRICE) AS revenue_last_90d
+    FROM ORDER_ITEMS
+    WHERE STATUS NOT IN ('Cancelled', 'Returned')
+      AND CREATED_AT >= DATE '2026-04-25' - INTERVAL 90 DAY
+  notes: "Anchor to 2026-04-25. Window on ORDERS.CREATED_AT."
+
+- id: thelook__new_users_last_90d
+  dataset: thelook
+  question: "How many new users registered in the last 90 days?"
+  difficulty: date_window
+  uses: [customers]
+  required_facts:
+    - "A user's signup date is USERS.CREATED_AT (registration), distinct from any order date."
+    - "'Last 90 days' is CREATED_AT >= snapshot_date - 90 days; count users (one row per USERS.ID)."
+  gap: false
+  gold_sql: |
+    SELECT COUNT(*) AS new_users_last_90d
+    FROM USERS
+    WHERE CREATED_AT >= DATE '2026-04-25' - INTERVAL 90 DAY
+  example_question: "How many orders did we have in the last 90 days?"
+  example_sql: |
+    SELECT COUNT(DISTINCT ORDER_ID) AS order_count_last_90d
+    FROM ORDERS
+    WHERE CREATED_AT >= DATE '2026-04-25' - INTERVAL 90 DAY
+  notes: "New = registered in window, by USERS.CREATED_AT (not first order). Anchor 2026-04-25. Expect 9469."
+
+# ---- multi_step (3) ---------------------------------------------------------
+
+- id: thelook__revenue_by_month
+  dataset: thelook
+  question: "What is total revenue by month?"
+  difficulty: multi_step
+  uses: [revenue]
+  required_facts:
+    - "Revenue = SUM(ORDER_ITEMS.SALE_PRICE) over items NOT IN ('Cancelled','Returned')."
+    - "'By month' buckets ORDER_ITEMS.CREATED_AT to calendar month."
+  gap: false
+  gold_sql: |
+    SELECT date_trunc('month', CREATED_AT) AS month, SUM(SALE_PRICE) AS revenue
+    FROM ORDER_ITEMS
+    WHERE STATUS NOT IN ('Cancelled', 'Returned')
+    GROUP BY month
+    ORDER BY month
+  example_question: "What is total revenue by product category, for the top 5 categories?"
+  example_sql: |
+    SELECT p.CATEGORY, SUM(oi.SALE_PRICE) AS revenue
+    FROM ORDER_ITEMS oi
+    JOIN PRODUCTS p ON oi.PRODUCT_ID = p.ID
+    WHERE oi.STATUS NOT IN ('Cancelled', 'Returned')
+    GROUP BY p.CATEGORY
+    ORDER BY revenue DESC
+    LIMIT 5
+  notes: "Bucket CREATED_AT to month, sum filtered SALE_PRICE. 42 monthly buckets (2022-11 .. 2026-04)."
+
+- id: thelook__revenue_by_traffic_source
+  dataset: thelook
+  question: "What is total revenue by traffic source (acquisition channel)?"
+  difficulty: multi_step
+  uses: [revenue]
+  required_facts:
+    - "Revenue = SUM(ORDER_ITEMS.SALE_PRICE) over items NOT IN ('Cancelled','Returned')."
+    - "Traffic source is USERS.TRAFFIC_SOURCE; attribute revenue via the buyer: join ORDER_ITEMS.USER_ID = USERS.ID."
+  gap: false
+  gold_sql: |
+    SELECT u.TRAFFIC_SOURCE, SUM(oi.SALE_PRICE) AS revenue
+    FROM ORDER_ITEMS oi
+    JOIN USERS u ON oi.USER_ID = u.ID
+    WHERE oi.STATUS NOT IN ('Cancelled', 'Returned')
+    GROUP BY u.TRAFFIC_SOURCE
+    ORDER BY revenue DESC
+  example_question: "How many customers do we have by traffic source?"
+  example_sql: |
+    SELECT u.TRAFFIC_SOURCE, COUNT(DISTINCT o.USER_ID) AS customers
+    FROM ORDERS o
+    JOIN USERS u ON o.USER_ID = u.ID
+    GROUP BY u.TRAFFIC_SOURCE
+    ORDER BY customers DESC
+  notes: "Traffic source from USERS via the buyer join. 5 sources; Search leads."
+
+- id: thelook__category_highest_aov
+  dataset: thelook
+  question: "Which product category has the highest average order value, and what is it?"
+  difficulty: multi_step
+  uses: [average_order_value]
+  required_facts:
+    - "Revenue = SUM(ORDER_ITEMS.SALE_PRICE) over items NOT IN ('Cancelled','Returned'); category is PRODUCTS.CATEGORY (join PRODUCT_ID = ID)."
+    - "AOV per category = SUM(SALE_PRICE) / COUNT(DISTINCT ORDER_ID) within each category, not AVG over items."
+    - "'Highest' means order by per-category AOV descending and LIMIT 1."
+  gap: false
+  gold_sql: |
+    SELECT p.CATEGORY,
+           SUM(oi.SALE_PRICE) / COUNT(DISTINCT oi.ORDER_ID) AS average_order_value
+    FROM ORDER_ITEMS oi
+    JOIN PRODUCTS p ON oi.PRODUCT_ID = p.ID
+    WHERE oi.STATUS NOT IN ('Cancelled', 'Returned')
+    GROUP BY p.CATEGORY
+    ORDER BY average_order_value DESC, p.CATEGORY
+    LIMIT 1
+  example_question: "Which product category has the highest revenue?"
+  example_sql: |
+    SELECT p.CATEGORY, SUM(oi.SALE_PRICE) AS revenue
+    FROM ORDER_ITEMS oi
+    JOIN PRODUCTS p ON oi.PRODUCT_ID = p.ID
+    WHERE oi.STATUS NOT IN ('Cancelled', 'Returned')
+    GROUP BY p.CATEGORY
+    ORDER BY revenue DESC
+    LIMIT 1
+  notes: "Per-category AOV = filtered revenue / distinct orders, then take the max. Tie-break on CATEGORY."
+
+# ---- hard_multistep (11) ----------------------------------------------------
+# Even with every fact present, the gold here must COMPOSE several steps
+# (CTEs, window functions, anti-joins, two-window comparisons, conditional
+# aggregation). These stress derivation effort beyond the single-step strata.
+
+- id: thelook__mom_revenue_growth
+  dataset: thelook
+  question: "What is the month-over-month revenue growth rate (%) for each month?"
+  difficulty: hard_multistep
+  uses: [revenue]
+  required_facts:
+    - "Revenue = SUM(ORDER_ITEMS.SALE_PRICE) over items NOT IN ('Cancelled','Returned'); 'by month' buckets CREATED_AT to calendar month."
+    - "Month-over-month growth % = 100 * (this month - prior month) / prior month, comparing each month to the immediately preceding calendar month (e.g. LAG over ordered months)."
+    - "The first month has no prior month, so its growth is NULL."
+  gap: false
+  gold_sql: |
+    WITH monthly AS (
+      SELECT date_trunc('month', CREATED_AT) AS month, SUM(SALE_PRICE) AS rev
+      FROM ORDER_ITEMS
+      WHERE STATUS NOT IN ('Cancelled', 'Returned')
+      GROUP BY 1
+    )
+    SELECT month,
+           rev,
+           100.0 * (rev - LAG(rev) OVER (ORDER BY month))
+                 / LAG(rev) OVER (ORDER BY month) AS growth_pct
+    FROM monthly
+    ORDER BY month
+  example_question: "What is the month-over-month growth rate (%) in distinct orders for each month?"
+  example_sql: |
+    WITH monthly AS (
+      SELECT date_trunc('month', CREATED_AT) AS month, COUNT(DISTINCT ORDER_ID) AS orders
+      FROM ORDERS
+      GROUP BY 1
+    )
+    SELECT month,
+           orders,
+           100.0 * (orders - LAG(orders) OVER (ORDER BY month))
+                 / LAG(orders) OVER (ORDER BY month) AS growth_pct
+    FROM monthly
+    ORDER BY month
+  notes: "Aggregate filtered revenue to month, then LAG. First month (2022-11) has NULL growth. 42 rows."
+
+- id: thelook__category_revenue_share
+  dataset: thelook
+  question: "What is each product category's share (%) of total company revenue?"
+  difficulty: hard_multistep
+  uses: [revenue]
+  required_facts:
+    - "Revenue = SUM(ORDER_ITEMS.SALE_PRICE) over items NOT IN ('Cancelled','Returned'); category is PRODUCTS.CATEGORY (join PRODUCT_ID = ID)."
+    - "Share of total = a category's revenue divided by the grand total revenue across all categories, x100; the denominator is the company-wide total (a window SUM over all groups), not a per-category value."
+  gap: false
+  gold_sql: |
+    SELECT p.CATEGORY,
+           100.0 * SUM(oi.SALE_PRICE) / SUM(SUM(oi.SALE_PRICE)) OVER () AS pct_of_total
+    FROM ORDER_ITEMS oi
+    JOIN PRODUCTS p ON oi.PRODUCT_ID = p.ID
+    WHERE oi.STATUS NOT IN ('Cancelled', 'Returned')
+    GROUP BY p.CATEGORY
+    ORDER BY pct_of_total DESC, p.CATEGORY
+  example_question: "What is each department's share (%) of total company revenue?"
+  example_sql: |
+    SELECT p.DEPARTMENT,
+           SUM(oi.SALE_PRICE) AS revenue,
+           100.0 * SUM(oi.SALE_PRICE) / SUM(SUM(oi.SALE_PRICE)) OVER () AS pct_of_total
+    FROM ORDER_ITEMS oi
+    JOIN PRODUCTS p ON oi.PRODUCT_ID = p.ID
+    WHERE oi.STATUS NOT IN ('Cancelled', 'Returned')
+    GROUP BY p.DEPARTMENT
+    ORDER BY revenue DESC
+  notes: "Per-category SUM divided by a window SUM-over-all (no PARTITION). 26 categories; shares sum to 100."
+
+- id: thelook__cumulative_revenue_by_month
+  dataset: thelook
+  question: "What is the running cumulative revenue by month (revenue to date at the end of each month)?"
+  difficulty: hard_multistep
+  uses: [revenue]
+  required_facts:
+    - "Revenue = SUM(ORDER_ITEMS.SALE_PRICE) over items NOT IN ('Cancelled','Returned'); 'by month' buckets CREATED_AT to calendar month."
+    - "Cumulative/running revenue = the sum of monthly revenue from the first month through the current month (a running total ordered by month), not the per-month figure."
+  gap: false
+  gold_sql: |
+    WITH monthly AS (
+      SELECT date_trunc('month', CREATED_AT) AS month, SUM(SALE_PRICE) AS rev
+      FROM ORDER_ITEMS
+      WHERE STATUS NOT IN ('Cancelled', 'Returned')
+      GROUP BY 1
+    )
+    SELECT month,
+           SUM(rev) OVER (ORDER BY month
+                          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_rev
+    FROM monthly
+    ORDER BY month
+  example_question: "What is the running cumulative count of distinct orders by month?"
+  example_sql: |
+    WITH monthly AS (
+      SELECT date_trunc('month', CREATED_AT) AS month, COUNT(DISTINCT ORDER_ID) AS orders
+      FROM ORDERS
+      GROUP BY 1
+    )
+    SELECT month,
+           orders,
+           SUM(orders) OVER (ORDER BY month
+                             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_orders
+    FROM monthly
+    ORDER BY month
+  notes: "Aggregate to month, then a window running SUM ordered by month. Last row's cumulative equals total revenue 8067638.53. 42 rows."
+
+- id: thelook__repeat_customer_rate
+  dataset: thelook
+  question: "What is our repeat-customer rate, i.e. the share (%) of customers who have placed at least 2 orders?"
+  difficulty: hard_multistep
+  uses: [customers, orders]
+  required_facts:
+    - "A customer is USERS.ID = ORDERS.USER_ID; count a customer's orders as COUNT(DISTINCT ORDER_ID) per USER_ID."
+    - "A repeat customer = a customer with 2 or more distinct orders."
+    - "Repeat-customer rate = repeat customers / total customers who ordered, x100; the denominator is customers, not orders."
+  gap: false
+  gold_sql: |
+    WITH per_customer AS (
+      SELECT USER_ID, COUNT(DISTINCT ORDER_ID) AS n_orders
+      FROM ORDERS
+      GROUP BY USER_ID
+    )
+    SELECT 100.0 * COUNT(*) FILTER (WHERE n_orders >= 2) / COUNT(*) AS repeat_customer_rate_pct
+    FROM per_customer
+  example_question: "What share (%) of customers are single-order (one-and-done) customers?"
+  example_sql: |
+    WITH per_customer AS (
+      SELECT USER_ID, COUNT(DISTINCT ORDER_ID) AS n_orders
+      FROM ORDERS
+      GROUP BY USER_ID
+    )
+    SELECT 100.0 * COUNT(*) FILTER (WHERE n_orders = 1) / COUNT(*) AS single_order_rate_pct
+    FROM per_customer
+  notes: "Per-customer distinct-order counts, then conditional aggregation (FILTER >= 2) over customers. Expect ~37.51%."
+
+- id: thelook__top_product_per_category
+  dataset: thelook
+  question: "What is the top-selling product (by revenue) in each product category?"
+  difficulty: hard_multistep
+  uses: [revenue]
+  required_facts:
+    - "Revenue = SUM(ORDER_ITEMS.SALE_PRICE) over items NOT IN ('Cancelled','Returned'); product and category come from PRODUCTS (join PRODUCT_ID = ID)."
+    - "'Top per category' = rank products within each category by revenue and keep the top one (one row per category)."
+    - "Break ties deterministically (e.g. by PRODUCT_ID) so exactly one product is returned per category."
+  gap: false
+  gold_sql: |
+    WITH prod_rev AS (
+      SELECT p.CATEGORY, p.ID AS product_id, p.NAME, SUM(oi.SALE_PRICE) AS revenue
+      FROM ORDER_ITEMS oi
+      JOIN PRODUCTS p ON oi.PRODUCT_ID = p.ID
+      WHERE oi.STATUS NOT IN ('Cancelled', 'Returned')
+      GROUP BY p.CATEGORY, p.ID, p.NAME
+    ),
+    ranked AS (
+      SELECT prod_rev.*,
+             ROW_NUMBER() OVER (PARTITION BY CATEGORY ORDER BY revenue DESC, product_id) AS rn
+      FROM prod_rev
+    )
+    SELECT CATEGORY, product_id, NAME, revenue
+    FROM ranked
+    WHERE rn = 1
+    ORDER BY CATEGORY
+  example_question: "What is the top-selling brand (by revenue) in each product category?"
+  example_sql: |
+    WITH brand_rev AS (
+      SELECT p.CATEGORY, p.BRAND, SUM(oi.SALE_PRICE) AS revenue
+      FROM ORDER_ITEMS oi
+      JOIN PRODUCTS p ON oi.PRODUCT_ID = p.ID
+      WHERE oi.STATUS NOT IN ('Cancelled', 'Returned')
+      GROUP BY p.CATEGORY, p.BRAND
+    ),
+    ranked AS (
+      SELECT brand_rev.*,
+             ROW_NUMBER() OVER (PARTITION BY CATEGORY ORDER BY revenue DESC, BRAND) AS rn
+      FROM brand_rev
+    )
+    SELECT CATEGORY, BRAND, revenue
+    FROM ranked
+    WHERE rn = 1
+    ORDER BY CATEGORY
+  notes: "Per-product filtered revenue, ROW_NUMBER partitioned by category, tie-break on PRODUCT_ID. 26 rows."
+
+- id: thelook__accelerating_customers
+  dataset: thelook
+  question: "How many customers spent more in the last 90 days than in the 90 days before that?"
+  difficulty: hard_multistep
+  uses: [total_spend]
+  required_facts:
+    - "Spend = SUM(ORDER_ITEMS.SALE_PRICE) over items NOT IN ('Cancelled','Returned'), per customer (USER_ID); item date is ORDER_ITEMS.CREATED_AT."
+    - "'Last 90 days' is CREATED_AT >= snapshot_date - 90 days; 'the 90 days before that' is snapshot_date - 180 days <= CREATED_AT < snapshot_date - 90 days (non-overlapping)."
+    - "Compute both windowed sums per customer and count customers whose last-90 spend strictly exceeds prior-90; a customer absent from a window contributes 0."
+  gap: false
+  gold_sql: |
+    WITH per_customer AS (
+      SELECT USER_ID,
+             SUM(SALE_PRICE) FILTER (
+               WHERE CREATED_AT >= DATE '2026-04-25' - INTERVAL 90 DAY) AS last90,
+             SUM(SALE_PRICE) FILTER (
+               WHERE CREATED_AT >= DATE '2026-04-25' - INTERVAL 180 DAY
+                 AND CREATED_AT <  DATE '2026-04-25' - INTERVAL 90 DAY) AS prior90
+      FROM ORDER_ITEMS
+      WHERE STATUS NOT IN ('Cancelled', 'Returned')
+      GROUP BY USER_ID
+    )
+    SELECT COUNT(*) AS accelerating_customers
+    FROM per_customer
+    WHERE COALESCE(last90, 0) > COALESCE(prior90, 0)
+  example_question: "How many customers placed more orders in the last 90 days than in the 90 days before that?"
+  example_sql: |
+    WITH per_customer AS (
+      SELECT USER_ID,
+             COUNT(DISTINCT ORDER_ID) FILTER (
+               WHERE CREATED_AT >= DATE '2026-04-25' - INTERVAL 90 DAY) AS last90,
+             COUNT(DISTINCT ORDER_ID) FILTER (
+               WHERE CREATED_AT >= DATE '2026-04-25' - INTERVAL 180 DAY
+                 AND CREATED_AT <  DATE '2026-04-25' - INTERVAL 90 DAY) AS prior90
+      FROM ORDERS
+      GROUP BY USER_ID
+    )
+    SELECT COUNT(*) AS accelerating_customers
+    FROM per_customer
+    WHERE last90 > prior90
+  notes: "Two non-overlapping 90-day windowed sums per customer vs the 2026-04-25 snapshot, then compare. Absent-in-window = 0 spend."
+
+- id: thelook__avg_days_between_orders
+  dataset: thelook
+  question: "On average, how many days elapse between a customer's consecutive orders (averaged across customers)?"
+  difficulty: hard_multistep
+  uses: [orders]
+  required_facts:
+    - "Order timing comes from ORDERS.CREATED_AT, ordered per customer (USER_ID); collapse to one timestamp per distinct order first."
+    - "The gap between consecutive orders is the day difference between an order and that same customer's immediately preceding order (e.g. LAG over CREATED_AT partitioned by USER_ID)."
+    - "Customers with only one order contribute no gaps and are excluded."
+    - "Average per customer first, then average those per-customer averages across customers (so frequent buyers don't dominate)."
+  gap: false
+  gold_sql: |
+    WITH orders_dedup AS (
+      SELECT ORDER_ID, USER_ID, MIN(CREATED_AT) AS created_at
+      FROM ORDERS
+      GROUP BY ORDER_ID, USER_ID
+    ),
+    gaps AS (
+      SELECT USER_ID,
+             date_diff('day',
+                       LAG(created_at) OVER (PARTITION BY USER_ID ORDER BY created_at, ORDER_ID),
+                       created_at) AS gap_days
+      FROM orders_dedup
+    ),
+    per_customer AS (
+      SELECT USER_ID, AVG(gap_days) AS avg_gap
+      FROM gaps
+      WHERE gap_days IS NOT NULL
+      GROUP BY USER_ID
+    )
+    SELECT AVG(avg_gap) AS avg_days_between_orders
+    FROM per_customer
+  example_question: "On average, how many days pass between a customer's first order and their most recent order (averaged across customers)?"
+  example_sql: |
+    WITH per_customer AS (
+      SELECT USER_ID,
+             date_diff('day', MIN(CREATED_AT), MAX(CREATED_AT)) AS span_days,
+             COUNT(DISTINCT ORDER_ID) AS n_orders
+      FROM ORDERS
+      GROUP BY USER_ID
+    )
+    SELECT AVG(span_days) AS avg_span_days
+    FROM per_customer
+    WHERE n_orders >= 2
+  notes: "LAG on per-order CREATED_AT partitioned by customer, average per customer, then across customers. Single-order customers excluded."
+
+- id: thelook__lapsed_customers
+  dataset: thelook
+  question: "How many customers have lapsed, i.e. ordered before the last 90 days but not at all within the last 90 days?"
+  difficulty: hard_multistep
+  uses: [customers, orders]
+  required_facts:
+    - "An order's date is ORDERS.CREATED_AT; 'last 90 days' is CREATED_AT >= snapshot_date - 90 days."
+    - "A lapsed customer = a user with at least one order before the last-90-day window but zero orders inside it (an anti-join / NOT EXISTS against the recent window)."
+    - "Count distinct customers (USER_ID), not orders."
+  gap: false
+  gold_sql: |
+    SELECT COUNT(*) AS lapsed_customers
+    FROM (
+      SELECT DISTINCT USER_ID
+      FROM ORDERS
+      WHERE CREATED_AT < DATE '2026-04-25' - INTERVAL 90 DAY
+    ) prior
+    WHERE NOT EXISTS (
+      SELECT 1 FROM ORDERS o
+      WHERE o.USER_ID = prior.USER_ID
+        AND o.CREATED_AT >= DATE '2026-04-25' - INTERVAL 90 DAY
+    )
+  example_question: "How many customers are recent-only, i.e. placed their first order(s) within the last 90 days and never before it?"
+  example_sql: |
+    SELECT COUNT(*) AS recent_only_customers
+    FROM (
+      SELECT DISTINCT USER_ID
+      FROM ORDERS
+      WHERE CREATED_AT >= DATE '2026-04-25' - INTERVAL 90 DAY
+    ) recent
+    WHERE NOT EXISTS (
+      SELECT 1 FROM ORDERS o
+      WHERE o.USER_ID = recent.USER_ID
+        AND o.CREATED_AT < DATE '2026-04-25' - INTERVAL 90 DAY
+    )
+  notes: "Anti-join: customers active before the window with NOT EXISTS any order inside it. Anchored to 2026-04-25."
+
+- id: thelook__return_rate_by_category
+  dataset: thelook
+  question: "What is the return rate by product category, ranked from highest to lowest?"
+  difficulty: hard_multistep
+  uses: [return_rate]
+  required_facts:
+    - "An item is returned when ORDER_ITEMS.RETURNED_AT IS NOT NULL; category is PRODUCTS.CATEGORY (join PRODUCT_ID = ID)."
+    - "Return rate by category = returned items / all items in that category (conditional count over total count), at the item grain."
+    - "'Ranked' means order by return rate descending."
+  gap: false
+  gold_sql: |
+    SELECT p.CATEGORY,
+           COUNT(*) FILTER (WHERE oi.RETURNED_AT IS NOT NULL) * 1.0 / COUNT(*) AS return_rate
+    FROM ORDER_ITEMS oi
+    JOIN PRODUCTS p ON oi.PRODUCT_ID = p.ID
+    GROUP BY p.CATEGORY
+    ORDER BY return_rate DESC, p.CATEGORY
+  example_question: "What is the return rate by product department, ranked from highest to lowest?"
+  example_sql: |
+    SELECT p.DEPARTMENT,
+           COUNT(*) FILTER (WHERE oi.RETURNED_AT IS NOT NULL) * 1.0 / COUNT(*) AS return_rate
+    FROM ORDER_ITEMS oi
+    JOIN PRODUCTS p ON oi.PRODUCT_ID = p.ID
+    GROUP BY p.DEPARTMENT
+    ORDER BY return_rate DESC
+  notes: "Item-grain return rate per category, conditional count on RETURNED_AT. 26 rows, tie-break on CATEGORY."
+
+- id: thelook__cohort_revenue_by_signup_month
+  dataset: thelook
+  question: "For each signup-month cohort (users grouped by the month they registered), how many users registered and what is the total revenue from that cohort's orders?"
+  difficulty: hard_multistep
+  uses: [revenue, customers]
+  required_facts:
+    - "A user's signup month = the calendar month of USERS.CREATED_AT (registration date), bucketed to month."
+    - "Cohort revenue = SUM(ORDER_ITEMS.SALE_PRICE) over items NOT IN ('Cancelled','Returned') across ALL orders by that cohort's users; attribute via ORDER_ITEMS.USER_ID = USERS.ID."
+    - "Count users by the cohort (all registered users in the month), but revenue comes only from those who ordered; use a LEFT JOIN so cohorts with no revenue still appear."
+  gap: false
+  gold_sql: |
+    SELECT date_trunc('month', u.CREATED_AT) AS signup_month,
+           COUNT(DISTINCT u.ID) AS cohort_users,
+           SUM(oi.SALE_PRICE) AS cohort_revenue
+    FROM USERS u
+    LEFT JOIN ORDER_ITEMS oi
+      ON oi.USER_ID = u.ID
+     AND oi.STATUS NOT IN ('Cancelled', 'Returned')
+    GROUP BY signup_month
+    ORDER BY signup_month
+  example_question: "For each signup-month cohort, how many users registered and how many distinct orders did they place in total?"
+  example_sql: |
+    SELECT date_trunc('month', u.CREATED_AT) AS signup_month,
+           COUNT(DISTINCT u.ID) AS cohort_users,
+           COUNT(DISTINCT o.ORDER_ID) AS cohort_orders
+    FROM USERS u
+    LEFT JOIN ORDERS o ON o.USER_ID = u.ID
+    GROUP BY signup_month
+    ORDER BY signup_month
+  notes: "Signup month from USERS.CREATED_AT; LEFT JOIN to filtered order items for cohort revenue. ~42 cohort rows."
+
+- id: thelook__top_traffic_source_per_state
+  dataset: thelook
+  question: "For each state, which traffic source acquired the most customers (users who ordered), and how many?"
+  difficulty: hard_multistep
+  uses: [customers]
+  required_facts:
+    - "A customer is a user who placed at least one order (USERS.ID present in ORDERS.USER_ID); state is USERS.STATE, traffic source is USERS.TRAFFIC_SOURCE."
+    - "Count distinct customers per (state, traffic source), then keep the top traffic source within each state (one row per state)."
+    - "Break ties deterministically (e.g. by TRAFFIC_SOURCE) so exactly one source is returned per state."
+  gap: false
+  gold_sql: |
+    WITH cust AS (
+      SELECT DISTINCT u.ID, u.STATE, u.TRAFFIC_SOURCE
+      FROM USERS u
+      WHERE EXISTS (SELECT 1 FROM ORDERS o WHERE o.USER_ID = u.ID)
+    ),
+    counts AS (
+      SELECT STATE, TRAFFIC_SOURCE, COUNT(*) AS customers
+      FROM cust
+      GROUP BY STATE, TRAFFIC_SOURCE
+    ),
+    ranked AS (
+      SELECT counts.*,
+             ROW_NUMBER() OVER (PARTITION BY STATE ORDER BY customers DESC, TRAFFIC_SOURCE) AS rn
+      FROM counts
+    )
+    SELECT STATE, TRAFFIC_SOURCE, customers
+    FROM ranked
+    WHERE rn = 1
+    ORDER BY STATE
+  example_question: "For each US state, which traffic source acquired the most users overall (registered, not just buyers), and how many?"
+  example_sql: |
+    WITH counts AS (
+      SELECT STATE, TRAFFIC_SOURCE, COUNT(*) AS users
+      FROM USERS
+      GROUP BY STATE, TRAFFIC_SOURCE
+    ),
+    ranked AS (
+      SELECT counts.*,
+             ROW_NUMBER() OVER (PARTITION BY STATE ORDER BY users DESC, TRAFFIC_SOURCE) AS rn
+      FROM counts
+    )
+    SELECT STATE, TRAFFIC_SOURCE, users
+    FROM ranked
+    WHERE rn = 1
+    ORDER BY STATE
+  notes: "Customers = users who ordered (EXISTS in ORDERS). Per-state argmax over traffic source via ROW_NUMBER, tie-break on TRAFFIC_SOURCE. One row per state."

@@ -1,0 +1,707 @@
+# Jaffle Shop pilot question set for the derivation-distance study.
+# All questions are derivation questions (gap: false). The planted "regulars"
+# completeness gap is intentionally excluded. Date windows anchor to the data's
+# max order date 2026-06-17 (never CURRENT_DATE).
+# Difficulty strata: single_agg, multi_join, date_window, multi_step (~3 each).
+
+# ---- single_agg (3) ---------------------------------------------------------
+
+- id: jaffle__total_revenue
+  dataset: jaffle-shop
+  question: "What is our total revenue?"
+  difficulty: single_agg
+  uses: [revenue]
+  required_facts:
+    - "Revenue is the pre-tax order value: use ORDERS.SUBTOTAL, not ORDER_TOTAL (which adds per-store sales tax)."
+  gap: false
+  gold_sql: |
+    SELECT SUM(SUBTOTAL) AS revenue
+    FROM ORDERS
+  example_question: "How many orders have we had in total?"
+  example_sql: |
+    SELECT COUNT(*) AS order_count
+    FROM ORDERS
+  notes: "Revenue is pre-tax SUBTOTAL summed over all orders. Expect 637444."
+
+- id: jaffle__order_count
+  dataset: jaffle-shop
+  question: "How many orders have we had in total?"
+  difficulty: single_agg
+  uses: [order_count]
+  required_facts: []
+  gap: false
+  gold_sql: |
+    SELECT COUNT(*) AS order_count
+    FROM ORDERS
+  example_question: "What is our total revenue?"
+  example_sql: |
+    SELECT SUM(SUBTOTAL) AS revenue
+    FROM ORDERS
+  notes: "One row per order. Expect 61948 (documented)."
+
+- id: jaffle__average_order_value
+  dataset: jaffle-shop
+  question: "What is our average order value?"
+  difficulty: single_agg
+  uses: [average_order_value]
+  required_facts:
+    - "Order value is pre-tax: average ORDERS.SUBTOTAL, not ORDER_TOTAL (which adds per-store sales tax)."
+    - "Average order value = AVG(SUBTOTAL) over orders (one row per order)."
+  gap: false
+  gold_sql: |
+    SELECT AVG(SUBTOTAL) AS average_order_value
+    FROM ORDERS
+  example_question: "What is our total revenue?"
+  example_sql: |
+    SELECT SUM(SUBTOTAL) AS revenue
+    FROM ORDERS
+  notes: "AOV is mean of pre-tax SUBTOTAL. Expect ~10.29."
+
+# ---- multi_join (3) ---------------------------------------------------------
+
+- id: jaffle__revenue_by_store_top5
+  dataset: jaffle-shop
+  question: "What is total revenue by store, for the top 5 stores?"
+  difficulty: multi_join
+  uses: [revenue]
+  required_facts:
+    - "Revenue is the pre-tax order value: use ORDERS.SUBTOTAL, not ORDER_TOTAL (which adds per-store sales tax)."
+    - "A store's name is STORES.STORE_NAME; join ORDERS.STORE_ID = STORES.STORE_ID for any by-store cut."
+    - "'Top 5 stores' means order by revenue descending and LIMIT 5."
+  gap: false
+  gold_sql: |
+    SELECT s.STORE_NAME, SUM(o.SUBTOTAL) AS revenue
+    FROM ORDERS o
+    JOIN STORES s ON o.STORE_ID = s.STORE_ID
+    GROUP BY s.STORE_NAME
+    ORDER BY revenue DESC
+    LIMIT 5
+  example_question: "What is total revenue by month?"
+  example_sql: |
+    SELECT date_trunc('month', ORDERED_AT) AS month, SUM(SUBTOTAL) AS revenue
+    FROM ORDERS
+    GROUP BY month
+    ORDER BY month
+  notes: "Join ORDERS to STORES on STORE_ID. Documented top-5: Philadelphia 172736, Brooklyn 114418, Chicago 102551, San Francisco 89012, Los Angeles 83177."
+
+- id: jaffle__revenue_by_product_type
+  dataset: jaffle-shop
+  question: "What is product revenue split by product type (jaffle vs beverage)?"
+  difficulty: multi_join
+  uses: [revenue]
+  required_facts:
+    - "Per-product-type revenue goes through ORDER_ITEMS joined to PRODUCTS (sum PRODUCTS.PRICE per item); do NOT use ORDERS.SUBTOTAL, which is order-level, not per-product."
+    - "PRODUCT_TYPE is 'jaffle' or 'beverage'."
+  gap: false
+  gold_sql: |
+    SELECT p.PRODUCT_TYPE, SUM(p.PRICE) AS product_revenue
+    FROM ORDER_ITEMS oi
+    JOIN PRODUCTS p ON oi.SKU = p.SKU
+    GROUP BY p.PRODUCT_TYPE
+    ORDER BY product_revenue DESC
+  example_question: "What is total revenue by store, for the top 5 stores?"
+  example_sql: |
+    SELECT s.STORE_NAME, SUM(o.SUBTOTAL) AS revenue
+    FROM ORDERS o
+    JOIN STORES s ON o.STORE_ID = s.STORE_ID
+    GROUP BY s.STORE_NAME
+    ORDER BY revenue DESC
+    LIMIT 5
+  notes: "Product-mix questions go through ORDER_ITEMS -> PRODUCTS.PRICE, NOT ORDERS.SUBTOTAL (which is order-level). Expect beverage 396567, jaffle 240877."
+
+- id: jaffle__top_customers_by_spend
+  dataset: jaffle-shop
+  question: "Who are the top 5 customers by total spend, with their spend?"
+  difficulty: multi_join
+  uses: [revenue]
+  required_facts:
+    - "Customer spend = SUM of that customer's pre-tax ORDERS.SUBTOTAL (not ORDER_TOTAL)."
+    - "A customer's name is CUSTOMERS.CUSTOMER_NAME; join ORDERS.CUSTOMER_ID = CUSTOMERS.CUSTOMER_ID."
+    - "Group by CUSTOMER_ID (not name) so namesakes stay distinct."
+    - "'Top 5 customers' means order by total spend descending and LIMIT 5."
+  gap: false
+  gold_sql: |
+    SELECT c.CUSTOMER_NAME, SUM(o.SUBTOTAL) AS total_spend
+    FROM ORDERS o
+    JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+    GROUP BY c.CUSTOMER_ID, c.CUSTOMER_NAME
+    ORDER BY total_spend DESC
+    LIMIT 5
+  example_question: "What is total revenue by store, for the top 5 stores?"
+  example_sql: |
+    SELECT s.STORE_NAME, SUM(o.SUBTOTAL) AS revenue
+    FROM ORDERS o
+    JOIN STORES s ON o.STORE_ID = s.STORE_ID
+    GROUP BY s.STORE_NAME
+    ORDER BY revenue DESC
+    LIMIT 5
+  notes: "Customer spend is SUM of pre-tax SUBTOTAL grouped by customer. Group by CUSTOMER_ID to keep namesakes distinct."
+
+# ---- date_window (3) --------------------------------------------------------
+
+- id: jaffle__revenue_last_90d
+  dataset: jaffle-shop
+  question: "What was our revenue in the last 90 days?"
+  difficulty: date_window
+  uses: [revenue]
+  required_facts:
+    - "Revenue is the pre-tax order value: use ORDERS.SUBTOTAL, not ORDER_TOTAL (which adds per-store sales tax)."
+    - "'Last 90 days' is the 90 days ending on the snapshot date: ORDERED_AT >= snapshot_date - 90 days."
+  gap: false
+  gold_sql: |
+    SELECT SUM(SUBTOTAL) AS revenue_last_90d
+    FROM ORDERS
+    WHERE ORDERED_AT >= DATE '2026-06-17' - INTERVAL 90 DAY
+  example_question: "How many orders did we have in the last 90 days?"
+  example_sql: |
+    SELECT COUNT(*) AS order_count_last_90d
+    FROM ORDERS
+    WHERE ORDERED_AT >= DATE '2026-06-17' - INTERVAL 90 DAY
+  notes: "Anchor 'today' to 2026-06-17 (data max order date). Expect 250008."
+
+- id: jaffle__order_count_last_90d
+  dataset: jaffle-shop
+  question: "How many orders did we have in the last 90 days?"
+  difficulty: date_window
+  uses: [order_count]
+  required_facts:
+    - "'Last 90 days' is the 90 days ending on the snapshot date: ORDERED_AT >= snapshot_date - 90 days."
+  gap: false
+  gold_sql: |
+    SELECT COUNT(*) AS order_count_last_90d
+    FROM ORDERS
+    WHERE ORDERED_AT >= DATE '2026-06-17' - INTERVAL 90 DAY
+  example_question: "What was our revenue in the last 90 days?"
+  example_sql: |
+    SELECT SUM(SUBTOTAL) AS revenue_last_90d
+    FROM ORDERS
+    WHERE ORDERED_AT >= DATE '2026-06-17' - INTERVAL 90 DAY
+  notes: "Anchor to 2026-06-17. Expect 25395."
+
+- id: jaffle__new_customers_last_90d
+  dataset: jaffle-shop
+  question: "How many new customers did we acquire in the last 90 days (customers whose first ever order falls in the window)?"
+  difficulty: date_window
+  uses: [order_count]
+  required_facts:
+    - "A customer's first visit = their earliest ORDERED_AT (MIN over that customer's orders)."
+    - "A new customer in the window = a customer whose first-ever order falls in the window; count customers, not orders."
+    - "'Last 90 days' is the 90 days ending on the snapshot date: first_order >= snapshot_date - 90 days."
+  gap: false
+  gold_sql: |
+    SELECT COUNT(*) AS new_customers_last_90d
+    FROM (
+      SELECT CUSTOMER_ID, MIN(ORDERED_AT) AS first_order
+      FROM ORDERS
+      GROUP BY CUSTOMER_ID
+    )
+    WHERE first_order >= DATE '2026-06-17' - INTERVAL 90 DAY
+  example_question: "How many orders did we have in the last 90 days?"
+  example_sql: |
+    SELECT COUNT(*) AS order_count_last_90d
+    FROM ORDERS
+    WHERE ORDERED_AT >= DATE '2026-06-17' - INTERVAL 90 DAY
+  notes: "First visit = customer's earliest ORDERED_AT (per customers/measuring). New = first order within the 90-day window. Expect 1281."
+
+# ---- multi_step (3) ---------------------------------------------------------
+
+- id: jaffle__avg_basket_size
+  dataset: jaffle-shop
+  question: "What is the average basket size (average number of items per order)?"
+  difficulty: multi_step
+  uses: [order_count]
+  required_facts:
+    - "Basket size = number of ORDER_ITEMS rows per order (count items per ORDER_ID)."
+    - "Average basket size = average of those per-order item counts, averaged over orders (not items)."
+  gap: false
+  gold_sql: |
+    SELECT AVG(item_count) AS avg_basket_size
+    FROM (
+      SELECT ORDER_ID, COUNT(*) AS item_count
+      FROM ORDER_ITEMS
+      GROUP BY ORDER_ID
+    )
+  example_question: "What is total revenue by month?"
+  example_sql: |
+    SELECT date_trunc('month', ORDERED_AT) AS month, SUM(SUBTOTAL) AS revenue
+    FROM ORDERS
+    GROUP BY month
+    ORDER BY month
+  notes: "Count items per order from ORDER_ITEMS, then average. Expect ~1.479."
+
+- id: jaffle__revenue_by_month
+  dataset: jaffle-shop
+  question: "What is total revenue by month?"
+  difficulty: multi_step
+  uses: [revenue]
+  required_facts:
+    - "Revenue is the pre-tax order value: use ORDERS.SUBTOTAL, not ORDER_TOTAL (which adds per-store sales tax)."
+    - "'By month' buckets ORDERS.ORDERED_AT to calendar month."
+  gap: false
+  gold_sql: |
+    SELECT date_trunc('month', ORDERED_AT) AS month, SUM(SUBTOTAL) AS revenue
+    FROM ORDERS
+    GROUP BY month
+    ORDER BY month
+  example_question: "What is total revenue by store, for the top 5 stores?"
+  example_sql: |
+    SELECT s.STORE_NAME, SUM(o.SUBTOTAL) AS revenue
+    FROM ORDERS o
+    JOIN STORES s ON o.STORE_ID = s.STORE_ID
+    GROUP BY s.STORE_NAME
+    ORDER BY revenue DESC
+    LIMIT 5
+  notes: "Bucket ORDERED_AT to month, sum SUBTOTAL. 13 monthly buckets (2025-06 .. 2026-06)."
+
+- id: jaffle__store_highest_aov
+  dataset: jaffle-shop
+  question: "Which store has the highest average order value, and what is it?"
+  difficulty: multi_step
+  uses: [average_order_value]
+  required_facts:
+    - "Order value is pre-tax: average ORDERS.SUBTOTAL, not ORDER_TOTAL (which adds per-store sales tax)."
+    - "Average order value per store = AVG(SUBTOTAL) grouped by store; a store's name is STORES.STORE_NAME (join ORDERS.STORE_ID = STORES.STORE_ID)."
+    - "'Highest' means order by per-store AOV descending and LIMIT 1."
+  gap: false
+  gold_sql: |
+    SELECT s.STORE_NAME, AVG(o.SUBTOTAL) AS average_order_value
+    FROM ORDERS o
+    JOIN STORES s ON o.STORE_ID = s.STORE_ID
+    GROUP BY s.STORE_NAME
+    ORDER BY average_order_value DESC
+    LIMIT 1
+  example_question: "Who are the top 5 customers by total spend, with their spend?"
+  example_sql: |
+    SELECT c.CUSTOMER_NAME, SUM(o.SUBTOTAL) AS total_spend
+    FROM ORDERS o
+    JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+    GROUP BY c.CUSTOMER_ID, c.CUSTOMER_NAME
+    ORDER BY total_spend DESC
+    LIMIT 5
+  notes: "Compute AOV per store (join ORDERS->STORES, AVG SUBTOTAL), then take the max. Expect Chicago ~10.35."
+
+# ---- hard_multistep (11) ----------------------------------------------------
+# Even with every fact present, the gold here must COMPOSE several steps
+# (CTEs, window functions, anti-joins, two-window comparisons, conditional
+# aggregation). These stress derivation effort beyond the single-step strata.
+
+- id: jaffle__mom_revenue_growth
+  dataset: jaffle-shop
+  question: "What is the month-over-month revenue growth rate (%) for each month?"
+  difficulty: hard_multistep
+  uses: [revenue]
+  required_facts:
+    - "Revenue is the pre-tax order value: use ORDERS.SUBTOTAL, not ORDER_TOTAL (which adds per-store sales tax)."
+    - "'By month' buckets ORDERS.ORDERED_AT to calendar month."
+    - "Month-over-month growth % = 100 * (this month's revenue - prior month's revenue) / prior month's revenue, comparing each month to the immediately preceding calendar month."
+    - "The first month has no prior month, so its growth is NULL (no preceding row to compare)."
+  gap: false
+  gold_sql: |
+    WITH monthly AS (
+      SELECT date_trunc('month', ORDERED_AT) AS month, SUM(SUBTOTAL) AS rev
+      FROM ORDERS
+      GROUP BY 1
+    )
+    SELECT month,
+           rev,
+           100.0 * (rev - LAG(rev) OVER (ORDER BY month))
+                 / LAG(rev) OVER (ORDER BY month) AS growth_pct
+    FROM monthly
+    ORDER BY month
+  example_question: "What is the month-over-month order-count growth rate (%) for each month?"
+  example_sql: |
+    WITH monthly AS (
+      SELECT date_trunc('month', ORDERED_AT) AS month, COUNT(*) AS orders
+      FROM ORDERS
+      GROUP BY 1
+    )
+    SELECT month,
+           orders,
+           100.0 * (orders - LAG(orders) OVER (ORDER BY month))
+                 / LAG(orders) OVER (ORDER BY month) AS growth_pct
+    FROM monthly
+    ORDER BY month
+  notes: "Aggregate revenue to month, then LAG over the ordered months. First month (2025-06) has NULL growth. 13 monthly rows."
+
+- id: jaffle__store_revenue_share
+  dataset: jaffle-shop
+  question: "What is each store's share (%) of total company revenue?"
+  difficulty: hard_multistep
+  uses: [revenue]
+  required_facts:
+    - "Revenue is the pre-tax order value: use ORDERS.SUBTOTAL, not ORDER_TOTAL (which adds per-store sales tax)."
+    - "A store's name is STORES.STORE_NAME; join ORDERS.STORE_ID = STORES.STORE_ID for any by-store cut."
+    - "Share of total = a store's revenue divided by the grand total revenue across all stores, x100; the denominator is the company-wide total, not a per-store value."
+  gap: false
+  gold_sql: |
+    SELECT s.STORE_NAME,
+           SUM(o.SUBTOTAL) AS revenue,
+           100.0 * SUM(o.SUBTOTAL) / SUM(SUM(o.SUBTOTAL)) OVER () AS pct_of_total
+    FROM ORDERS o
+    JOIN STORES s ON o.STORE_ID = s.STORE_ID
+    GROUP BY s.STORE_NAME
+    ORDER BY revenue DESC
+  example_question: "What is each product type's share (%) of total product revenue?"
+  example_sql: |
+    SELECT p.PRODUCT_TYPE,
+           SUM(p.PRICE) AS product_revenue,
+           100.0 * SUM(p.PRICE) / SUM(SUM(p.PRICE)) OVER () AS pct_of_total
+    FROM ORDER_ITEMS oi
+    JOIN PRODUCTS p ON oi.SKU = p.SKU
+    GROUP BY p.PRODUCT_TYPE
+    ORDER BY product_revenue DESC
+  notes: "Per-store SUM divided by a window SUM-over-all (no PARTITION). 6 stores; shares sum to 100. Philadelphia ~27.1%."
+
+- id: jaffle__cumulative_revenue_by_month
+  dataset: jaffle-shop
+  question: "What is the running cumulative revenue by month (revenue to date at the end of each month)?"
+  difficulty: hard_multistep
+  uses: [revenue]
+  required_facts:
+    - "Revenue is the pre-tax order value: use ORDERS.SUBTOTAL, not ORDER_TOTAL (which adds per-store sales tax)."
+    - "'By month' buckets ORDERS.ORDERED_AT to calendar month."
+    - "Cumulative/running revenue = the sum of monthly revenue from the first month through the current month (a running total ordered by month), not the per-month figure."
+  gap: false
+  gold_sql: |
+    WITH monthly AS (
+      SELECT date_trunc('month', ORDERED_AT) AS month, SUM(SUBTOTAL) AS rev
+      FROM ORDERS
+      GROUP BY 1
+    )
+    SELECT month,
+           SUM(rev) OVER (ORDER BY month
+                          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_rev
+    FROM monthly
+    ORDER BY month
+  example_question: "What is the running cumulative order count by month?"
+  example_sql: |
+    WITH monthly AS (
+      SELECT date_trunc('month', ORDERED_AT) AS month, COUNT(*) AS orders
+      FROM ORDERS
+      GROUP BY 1
+    )
+    SELECT month,
+           orders,
+           SUM(orders) OVER (ORDER BY month
+                             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_orders
+    FROM monthly
+    ORDER BY month
+  notes: "Aggregate to month, then a window running SUM ordered by month. Last row's cumulative equals total revenue 637444. 13 rows."
+
+- id: jaffle__repeat_customer_rate
+  dataset: jaffle-shop
+  question: "What is our repeat-customer rate, i.e. the share (%) of customers who have placed at least 2 orders?"
+  difficulty: hard_multistep
+  uses: [order_count]
+  required_facts:
+    - "A repeat customer = a customer with 2 or more orders (count that customer's ORDERS rows by CUSTOMER_ID)."
+    - "Repeat-customer rate = number of repeat customers divided by the total number of customers who have ordered, x100."
+    - "The denominator is customers, not orders; compute one order count per customer first, then aggregate across customers."
+  gap: false
+  gold_sql: |
+    WITH per_customer AS (
+      SELECT CUSTOMER_ID, COUNT(*) AS n_orders
+      FROM ORDERS
+      GROUP BY CUSTOMER_ID
+    )
+    SELECT 100.0 * COUNT(*) FILTER (WHERE n_orders >= 2) / COUNT(*) AS repeat_customer_rate_pct
+    FROM per_customer
+  example_question: "What share (%) of customers are single-order (one-and-done) customers?"
+  example_sql: |
+    WITH per_customer AS (
+      SELECT CUSTOMER_ID, COUNT(*) AS n_orders
+      FROM ORDERS
+      GROUP BY CUSTOMER_ID
+    )
+    SELECT 100.0 * COUNT(*) FILTER (WHERE n_orders = 1) / COUNT(*) AS single_order_rate_pct
+    FROM per_customer
+  notes: "Per-customer order counts, then conditional aggregation (FILTER >= 2) over customers. Expect ~59.52%."
+
+- id: jaffle__top_product_per_store
+  dataset: jaffle-shop
+  question: "What is the best-selling product (by number of items sold) at each store?"
+  difficulty: hard_multistep
+  uses: [order_count]
+  required_facts:
+    - "'Best-selling by number of items' counts ORDER_ITEMS rows per product; product mix goes through ORDER_ITEMS joined to PRODUCTS, not ORDERS."
+    - "A store's name is STORES.STORE_NAME; the store of an item is its order's STORE_ID (join ORDER_ITEMS -> ORDERS -> STORES)."
+    - "'Best per store' = rank products within each store by item count and keep the top one (one row per store)."
+    - "Break ties deterministically (e.g. by SKU) so exactly one product is returned per store."
+  gap: false
+  gold_sql: |
+    WITH counts AS (
+      SELECT o.STORE_ID, oi.SKU, COUNT(*) AS items_sold
+      FROM ORDER_ITEMS oi
+      JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+      GROUP BY o.STORE_ID, oi.SKU
+    ),
+    ranked AS (
+      SELECT counts.*,
+             ROW_NUMBER() OVER (PARTITION BY STORE_ID ORDER BY items_sold DESC, SKU) AS rn
+      FROM counts
+    )
+    SELECT s.STORE_NAME, p.PRODUCT_NAME, ranked.items_sold
+    FROM ranked
+    JOIN STORES s ON ranked.STORE_ID = s.STORE_ID
+    JOIN PRODUCTS p ON ranked.SKU = p.SKU
+    WHERE ranked.rn = 1
+    ORDER BY s.STORE_NAME
+  example_question: "What is the best-selling product (by number of items sold) within each product type (jaffle vs beverage)?"
+  example_sql: |
+    WITH counts AS (
+      SELECT p.PRODUCT_TYPE, oi.SKU, COUNT(*) AS items_sold
+      FROM ORDER_ITEMS oi
+      JOIN PRODUCTS p ON oi.SKU = p.SKU
+      GROUP BY p.PRODUCT_TYPE, oi.SKU
+    ),
+    ranked AS (
+      SELECT counts.*,
+             ROW_NUMBER() OVER (PARTITION BY PRODUCT_TYPE ORDER BY items_sold DESC, SKU) AS rn
+      FROM counts
+    )
+    SELECT ranked.PRODUCT_TYPE, p.PRODUCT_NAME, ranked.items_sold
+    FROM ranked
+    JOIN PRODUCTS p ON ranked.SKU = p.SKU
+    WHERE ranked.rn = 1
+    ORDER BY ranked.PRODUCT_TYPE
+  notes: "ROW_NUMBER partitioned by store, tie-break on SKU. 6 rows. Beverages dominate (e.g. Philadelphia: adele-ade)."
+
+- id: jaffle__accelerating_customers
+  dataset: jaffle-shop
+  question: "How many customers spent more in the last 90 days than in the 90 days before that?"
+  difficulty: hard_multistep
+  uses: [revenue]
+  required_facts:
+    - "Spend = a customer's pre-tax ORDERS.SUBTOTAL summed over a window (not ORDER_TOTAL)."
+    - "'Last 90 days' is the 90 days ending on the snapshot date: ORDERED_AT >= snapshot_date - 90 days."
+    - "'The 90 days before that' is the immediately preceding 90-day window: snapshot_date - 180 days <= ORDERED_AT < snapshot_date - 90 days (non-overlapping with the last 90)."
+    - "Compute both windowed sums per customer and count customers whose last-90 spend strictly exceeds their prior-90 spend; a customer absent from a window contributes 0 to that window."
+  gap: false
+  gold_sql: |
+    WITH per_customer AS (
+      SELECT CUSTOMER_ID,
+             SUM(SUBTOTAL) FILTER (
+               WHERE ORDERED_AT >= DATE '2026-06-17' - INTERVAL 90 DAY) AS last90,
+             SUM(SUBTOTAL) FILTER (
+               WHERE ORDERED_AT >= DATE '2026-06-17' - INTERVAL 180 DAY
+                 AND ORDERED_AT <  DATE '2026-06-17' - INTERVAL 90 DAY) AS prior90
+      FROM ORDERS
+      GROUP BY CUSTOMER_ID
+    )
+    SELECT COUNT(*) AS accelerating_customers
+    FROM per_customer
+    WHERE COALESCE(last90, 0) > COALESCE(prior90, 0)
+  example_question: "How many customers placed more orders in the last 90 days than in the 90 days before that?"
+  example_sql: |
+    WITH per_customer AS (
+      SELECT CUSTOMER_ID,
+             COUNT(*) FILTER (
+               WHERE ORDERED_AT >= DATE '2026-06-17' - INTERVAL 90 DAY) AS last90,
+             COUNT(*) FILTER (
+               WHERE ORDERED_AT >= DATE '2026-06-17' - INTERVAL 180 DAY
+                 AND ORDERED_AT <  DATE '2026-06-17' - INTERVAL 90 DAY) AS prior90
+      FROM ORDERS
+      GROUP BY CUSTOMER_ID
+    )
+    SELECT COUNT(*) AS accelerating_customers
+    FROM per_customer
+    WHERE last90 > prior90
+  notes: "Two non-overlapping 90-day windowed sums per customer vs the 2026-06-17 snapshot, then compare. Absent-in-window treated as 0 spend. Expect 3354."
+
+- id: jaffle__avg_days_between_orders
+  dataset: jaffle-shop
+  question: "On average, how many days elapse between a customer's consecutive orders (averaged across customers)?"
+  difficulty: hard_multistep
+  uses: [order_count]
+  required_facts:
+    - "Order timing comes from ORDERS.ORDERED_AT, ordered per customer (CUSTOMER_ID)."
+    - "The gap between consecutive orders is the day difference between an order and that same customer's immediately preceding order (e.g. via LAG over ORDERED_AT partitioned by customer)."
+    - "Customers with only one order contribute no gaps (a single order has no preceding order) and are excluded."
+    - "Average per customer first, then average those per-customer averages across customers (so frequent buyers don't dominate)."
+  gap: false
+  gold_sql: |
+    WITH gaps AS (
+      SELECT CUSTOMER_ID,
+             date_diff('day',
+                       LAG(ORDERED_AT) OVER (PARTITION BY CUSTOMER_ID ORDER BY ORDERED_AT),
+                       ORDERED_AT) AS gap_days
+      FROM ORDERS
+    ),
+    per_customer AS (
+      SELECT CUSTOMER_ID, AVG(gap_days) AS avg_gap
+      FROM gaps
+      WHERE gap_days IS NOT NULL
+      GROUP BY CUSTOMER_ID
+    )
+    SELECT AVG(avg_gap) AS avg_days_between_orders
+    FROM per_customer
+  example_question: "On average, how many days pass between a customer's first order and their most recent order (averaged across customers)?"
+  example_sql: |
+    WITH per_customer AS (
+      SELECT CUSTOMER_ID,
+             date_diff('day', MIN(ORDERED_AT), MAX(ORDERED_AT)) AS span_days,
+             COUNT(*) AS n_orders
+      FROM ORDERS
+      GROUP BY CUSTOMER_ID
+    )
+    SELECT AVG(span_days) AS avg_span_days
+    FROM per_customer
+    WHERE n_orders >= 2
+  notes: "LAG on ORDERED_AT partitioned by customer for consecutive gaps, average per customer, then average across customers. Single-order customers excluded. Expect ~50.77 days."
+
+- id: jaffle__lapsed_customers
+  dataset: jaffle-shop
+  question: "How many customers have lapsed, i.e. ordered before the last 90 days but not at all within the last 90 days?"
+  difficulty: hard_multistep
+  uses: [order_count]
+  required_facts:
+    - "'Last 90 days' is the 90 days ending on the snapshot date: ORDERED_AT >= snapshot_date - 90 days."
+    - "A lapsed customer = one with at least one order before the last-90-day window but zero orders inside it (an anti-join / NOT EXISTS against the recent window)."
+    - "Count distinct customers, not orders."
+  gap: false
+  gold_sql: |
+    SELECT COUNT(*) AS lapsed_customers
+    FROM (
+      SELECT DISTINCT CUSTOMER_ID
+      FROM ORDERS
+      WHERE ORDERED_AT < DATE '2026-06-17' - INTERVAL 90 DAY
+    ) prior
+    WHERE NOT EXISTS (
+      SELECT 1 FROM ORDERS o
+      WHERE o.CUSTOMER_ID = prior.CUSTOMER_ID
+        AND o.ORDERED_AT >= DATE '2026-06-17' - INTERVAL 90 DAY
+    )
+  example_question: "How many customers are brand-new churners, i.e. placed their only order(s) within the last 90 days and never before it?"
+  example_sql: |
+    SELECT COUNT(*) AS recent_only_customers
+    FROM (
+      SELECT DISTINCT CUSTOMER_ID
+      FROM ORDERS
+      WHERE ORDERED_AT >= DATE '2026-06-17' - INTERVAL 90 DAY
+    ) recent
+    WHERE NOT EXISTS (
+      SELECT 1 FROM ORDERS o
+      WHERE o.CUSTOMER_ID = recent.CUSTOMER_ID
+        AND o.ORDERED_AT < DATE '2026-06-17' - INTERVAL 90 DAY
+    )
+  notes: "Anti-join: customers active before the window with NOT EXISTS any order inside it. Anchored to 2026-06-17. Expect 2138."
+
+- id: jaffle__beverage_attach_rate
+  dataset: jaffle-shop
+  question: "What is the beverage attach rate, i.e. the share (%) of orders that contain at least one beverage item?"
+  difficulty: hard_multistep
+  uses: [order_count]
+  required_facts:
+    - "Whether an order contains a beverage goes through ORDER_ITEMS joined to PRODUCTS (PRODUCT_TYPE = 'beverage'), not ORDERS."
+    - "Attach rate = orders containing one or more beverage items divided by total orders, x100; an order counts once regardless of how many beverages it has."
+    - "The denominator is all orders (one row per ORDER_ID), including beverage-free ones."
+  gap: false
+  gold_sql: |
+    SELECT 100.0 * COUNT(*) FILTER (
+             WHERE EXISTS (
+               SELECT 1 FROM ORDER_ITEMS oi
+               JOIN PRODUCTS p ON oi.SKU = p.SKU
+               WHERE oi.ORDER_ID = o.ORDER_ID AND p.PRODUCT_TYPE = 'beverage'
+             )) / COUNT(*) AS beverage_attach_rate_pct
+    FROM ORDERS o
+  example_question: "What is the jaffle attach rate, i.e. the share (%) of orders that contain at least one jaffle item?"
+  example_sql: |
+    SELECT 100.0 * COUNT(*) FILTER (
+             WHERE EXISTS (
+               SELECT 1 FROM ORDER_ITEMS oi
+               JOIN PRODUCTS p ON oi.SKU = p.SKU
+               WHERE oi.ORDER_ID = o.ORDER_ID AND p.PRODUCT_TYPE = 'jaffle'
+             )) / COUNT(*) AS jaffle_attach_rate_pct
+    FROM ORDERS o
+  notes: "EXISTS subquery per order against beverage items, conditional count over all orders as denominator. Expect ~97.39%."
+
+- id: jaffle__cohort_revenue_by_acquisition_month
+  dataset: jaffle-shop
+  question: "For each acquisition-month cohort (customers grouped by the month of their first ever order), how many customers are in the cohort and what is their total lifetime revenue?"
+  difficulty: hard_multistep
+  uses: [revenue]
+  required_facts:
+    - "A customer's acquisition month = the calendar month of their first-ever order (MIN(ORDERED_AT) per CUSTOMER_ID, bucketed to month)."
+    - "A cohort = all customers acquired in the same month; assign each customer to exactly one cohort by their first order."
+    - "Cohort lifetime revenue = the sum of pre-tax ORDERS.SUBTOTAL (not ORDER_TOTAL) over ALL of that cohort's customers' orders, not just orders placed in the acquisition month."
+  gap: false
+  gold_sql: |
+    WITH firsts AS (
+      SELECT CUSTOMER_ID,
+             date_trunc('month', MIN(ORDERED_AT)) AS cohort_month
+      FROM ORDERS
+      GROUP BY CUSTOMER_ID
+    )
+    SELECT f.cohort_month,
+           COUNT(DISTINCT f.CUSTOMER_ID) AS cohort_customers,
+           SUM(o.SUBTOTAL) AS cohort_lifetime_revenue
+    FROM firsts f
+    JOIN ORDERS o ON o.CUSTOMER_ID = f.CUSTOMER_ID
+    GROUP BY f.cohort_month
+    ORDER BY f.cohort_month
+  example_question: "For each acquisition-month cohort, how many customers are in the cohort and how many orders have they placed in total?"
+  example_sql: |
+    WITH firsts AS (
+      SELECT CUSTOMER_ID,
+             date_trunc('month', MIN(ORDERED_AT)) AS cohort_month
+      FROM ORDERS
+      GROUP BY CUSTOMER_ID
+    )
+    SELECT f.cohort_month,
+           COUNT(DISTINCT f.CUSTOMER_ID) AS cohort_customers,
+           COUNT(o.ORDER_ID) AS cohort_total_orders
+    FROM firsts f
+    JOIN ORDERS o ON o.CUSTOMER_ID = f.CUSTOMER_ID
+    GROUP BY f.cohort_month
+    ORDER BY f.cohort_month
+  notes: "Per-customer first-order month assigns the cohort, then join back to ALL their orders for lifetime revenue. 13 cohort rows; earliest cohort 2025-06 has the most lifetime revenue."
+
+- id: jaffle__store_window_revenue_growth
+  dataset: jaffle-shop
+  question: "For each store, what was its revenue in the last 90 days versus the 90 days before that, and the growth rate (%) between them?"
+  difficulty: hard_multistep
+  uses: [revenue]
+  required_facts:
+    - "Revenue is the pre-tax order value: use ORDERS.SUBTOTAL, not ORDER_TOTAL (which adds per-store sales tax)."
+    - "A store's name is STORES.STORE_NAME; join ORDERS.STORE_ID = STORES.STORE_ID for any by-store cut."
+    - "'Last 90 days' is ORDERED_AT >= snapshot_date - 90 days; 'the 90 days before that' is snapshot_date - 180 days <= ORDERED_AT < snapshot_date - 90 days (non-overlapping)."
+    - "Growth % = 100 * (last-90 revenue - prior-90 revenue) / prior-90 revenue, computed per store."
+  gap: false
+  gold_sql: |
+    WITH per_store AS (
+      SELECT STORE_ID,
+             SUM(SUBTOTAL) FILTER (
+               WHERE ORDERED_AT >= DATE '2026-06-17' - INTERVAL 90 DAY) AS last90,
+             SUM(SUBTOTAL) FILTER (
+               WHERE ORDERED_AT >= DATE '2026-06-17' - INTERVAL 180 DAY
+                 AND ORDERED_AT <  DATE '2026-06-17' - INTERVAL 90 DAY) AS prior90
+      FROM ORDERS
+      GROUP BY STORE_ID
+    )
+    SELECT s.STORE_NAME,
+           ps.prior90,
+           ps.last90,
+           100.0 * (ps.last90 - ps.prior90) / ps.prior90 AS growth_pct
+    FROM per_store ps
+    JOIN STORES s ON ps.STORE_ID = s.STORE_ID
+    ORDER BY growth_pct DESC, s.STORE_NAME
+  example_question: "For each store, how many orders did it take in the last 90 days versus the 90 days before that, and the growth rate (%) between them?"
+  example_sql: |
+    WITH per_store AS (
+      SELECT STORE_ID,
+             COUNT(*) FILTER (
+               WHERE ORDERED_AT >= DATE '2026-06-17' - INTERVAL 90 DAY) AS last90,
+             COUNT(*) FILTER (
+               WHERE ORDERED_AT >= DATE '2026-06-17' - INTERVAL 180 DAY
+                 AND ORDERED_AT <  DATE '2026-06-17' - INTERVAL 90 DAY) AS prior90
+      FROM ORDERS
+      GROUP BY STORE_ID
+    )
+    SELECT s.STORE_NAME,
+           ps.prior90,
+           ps.last90,
+           100.0 * (ps.last90 - ps.prior90) / ps.prior90 AS growth_pct
+    FROM per_store ps
+    JOIN STORES s ON ps.STORE_ID = s.STORE_ID
+    ORDER BY growth_pct DESC, s.STORE_NAME
+  notes: "Two non-overlapping 90-day windowed sums per store vs 2026-06-17, then growth %. 6 rows; Brooklyn highest at ~16.84%."

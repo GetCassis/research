@@ -1,0 +1,1365 @@
+{
+  "domains": [
+    {
+      "path": "",
+      "display_name": "Marketplace data",
+      "description": "Global context for the marketplace demo dataset.",
+      "context_md": "This is a Brazilian online marketplace covering a broad catalog (health and beauty, bed bath and table, furniture and decor, housewares, sports and leisure, and dozens of other categories). Independent sellers list products; customers place orders; each order contains one or more order items, and each order item is sold and fulfilled by a single seller.\n\n## How the data is organized\n\nTwo connected domains:\n\n- [marketplace](marketplace): orders, order items, products, sellers, customers, payments, reviews, geolocation.\n- [funnel](funnel): the seller acquisition funnel (marketing qualified leads and closed deals).\n\nThe only bridge between the two domains is closed deal to seller. Each domain carries topic docs as child domains; open them with get() like any domain path.\n\n## Rules that apply to every question\n\n- Monetary amounts are in EUR: the underlying data is originally in Brazilian Real (BRL) and has been converted to EUR at the current exchange rate. Always render monetary amounts with the EUR currency (\u20ac symbol or 'EUR' code); never use 'R$', '$' or any other currency symbol, even when results break down by Brazilian state.\n- Realized sales are delivered orders: unless the user asks otherwise, restrict revenue, sales and business-volume questions to orders whose status is 'delivered'. This scopes money amounts only: customer membership, cohort assignment and first-order dates consider all orders regardless of status.\n- A customer id is issued per order, so the same real person appears under many customer ids over time. Count distinct customers by their customer unique id, never by the per-order customer id.\n- The data is current: orders span April 2024 through late May 2026. There is no older history; questions about earlier years have no data.\n\n## Governed metrics\n\nBusiness volume (BV / GMV), average order value (AOV), late delivery rate, order cancellation rate and repeat customer rate are governed metrics defined under [marketplace](marketplace). When a question uses one of these terms, use the metric definition exactly; do not re-derive or approximate it."
+    },
+    {
+      "path": "funnel",
+      "display_name": "Seller acquisition funnel",
+      "description": "Marketing qualified leads and closed deals; bridges to marketplace sellers.",
+      "context_md": "Prospective sellers enter as marketing qualified leads; sales closes some of them into deals; a closed deal creates a seller on the marketplace.\n\n## Tables\n\n- **MARKETING_QUALIFIED_LEADS**: one row per lead (id, first contact date, landing page, acquisition channel).\n- **CLOSED_DEALS**: one row per won deal, carrying the declared seller profile at acquisition and the sales reps who handled it.\n\nSee [lead lifecycle](funnel/lead-lifecycle) for the acquisition flow, glossary (MQL, SDR, SR), classification axes and data-quality quirks.\n\n## Joining the funnel to the marketplace\n\nThe only bridge is CLOSED_DEALS.SELLER_ID to SELLERS.SELLER_ID, and it is partial: only about 380 of the 842 closed-deal sellers appear in the marketplace tables (different sampling windows). State this caveat whenever combining funnel and marketplace data."
+    },
+    {
+      "path": "funnel/lead-lifecycle",
+      "display_name": "Lead lifecycle",
+      "description": "Acquisition flow, glossary (MQL, SDR, SR), classification axes, and funnel data quirks.",
+      "context_md": "# Lead lifecycle\n\n## How sellers are acquired\n\n1. A prospective seller signs up at a landing page and becomes a lead.\n2. An SDR contacts the lead, confirms information and schedules a consultancy.\n3. An SR runs the consultancy and either closes the deal or loses it.\n4. The signed lead becomes a seller and starts building a catalog.\n5. The seller's products are published on the marketplace, ready to sell.\n\nFirst contacts span January 2025 to January 2026; deals close from July 2025 to late June 2026.\n\n## Glossary\n\n- MQL (marketing qualified lead): a prospective seller who signed up and was qualified for sales follow-up. One row of MARKETING_QUALIFIED_LEADS per lead.\n- SDR (sales development representative): qualifies the lead and schedules the consultancy. SDR_ID on CLOSED_DEALS.\n- SR (sales representative): runs the consultancy and closes the deal. SR_ID on CLOSED_DEALS.\n\n## Three classification axes (do not confuse them)\n\n- BUSINESS_SEGMENT: the lead's industry vertical (home_appliances, watches, construction_tools, ...).\n- LEAD_TYPE: SDR-assigned sales-stage classification of maturity and online footprint (online_medium, online_big, industry, offline, ...).\n- BUSINESS_TYPE: self-reported nature of the business (reseller, manufacturer, other).\n\nLEAD_BEHAVIOUR_PROFILE is a DISC-style profile assigned by the SDR: cat, eagle, wolf, shark (shark tends to carry the highest deal size). It can be multi-valued ('cat,wolf') and is about 21% null; match with LIKE.\n\n## Quirks\n\n- Declared fields are sparse: HAS_COMPANY, HAS_GTIN and AVERAGE_STOCK are about 92% null; DECLARED_MONTHLY_REVENUE is often 0 with a single outlier around 8.5M EUR.\n- WON_DATE: treat as a date; a few rows carry a synthetic 02:00/03:00 time (Brazil midnight stored as UTC).\n- LANDING_PAGE_ID holds one page per lead row even when the lead visited several; do not infer multi-touch attribution from it.\n- ORIGIN values: organic_search, paid_search, social, affiliate, direct_traffic, email, referral, other, display, other_publicities."
+    },
+    {
+      "path": "marketplace",
+      "display_name": "Marketplace",
+      "description": "Orders, order items, products, sellers, customers, payments, reviews, geolocation.",
+      "context_md": "The transactional heart of the marketplace: customers place orders; an order contains one or more order items; each order item is one product sold and fulfilled by one seller.\n\n## Tables and routing\n\n- **ORDERS** is the hub: items, payments, reviews and customers all join through it. One row per order; money does NOT live here.\n- **ORDER_ITEMS** is the sale grain (one row per order line). PRICE carries business volume; FREIGHT_VALUE is shipping.\n- **CUSTOMERS** are per-order records; the real person is CUSTOMER_UNIQUE_ID.\n- **SELLERS** and **PRODUCTS** (with the PRODUCT_CATEGORY_NAME_TRANSLATION lookup) describe who sells what.\n- **ORDER_PAYMENTS** and **ORDER_REVIEWS** hang off orders.\n- **GEOLOCATION** maps zip prefixes to coordinates; dedup it before any join (see [geography](marketplace/geography)).\n\n## Topic docs\n\n- [Orders and delivery](marketplace/orders-and-delivery): status flow, lifecycle timestamps, on-time rules, order quirks.\n- [Measuring sales](marketplace/measuring-sales): where money lives, delivered-only rule, BV/GMV vocabulary, counting rules.\n- [Catalog and categories](marketplace/catalog-and-categories): Portuguese labels, English translation routing, uncategorized products.\n- [Payments](marketplace/payments): multi-record settlement, boleto and voucher explained, installments.\n- [Reviews](marketplace/reviews): how the survey works, score skew, dedup rules.\n- [Geography](marketplace/geography): states, regions, geolocation dedupe recipe.\n- [Seller performance](marketplace/seller-performance): per-seller sales activity, delivery punctuality, review quality."
+    },
+    {
+      "path": "marketplace/catalog-and-categories",
+      "display_name": "Catalog and categories",
+      "description": "Portuguese category labels, English translation routing, and uncategorized products.",
+      "context_md": "# Catalog and categories\n\n## Category labels\n\nPRODUCTS.PRODUCT_CATEGORY_NAME stores the raw category label in Portuguese (snake_case). For the readable English label, LEFT JOIN PRODUCT_CATEGORY_NAME_TRANSLATION on the raw label and COALESCE the English name with the raw value: about 70 categories are translated and a couple lack a translation row.\n\nEnglish labels are snake_case too: health_beauty, bed_bath_table, furniture_decor, housewares, sports_leisure and dozens more. Query the column for the full list rather than assuming a value exists.\n\n## Uncategorized products\n\nAbout 610 products have no category at all (NULL raw label). When reporting by category, keep them as their own group with a NULL label: do not drop them, and do not invent a label for them (COALESCE only translates existing labels).\n\n## Listing attributes\n\nPhysical attributes on PRODUCTS (weight in grams, length, height, width in cm) drive freight. PRODUCT_NAME_LENGHT, PRODUCT_DESCRIPTION_LENGHT and PRODUCT_PHOTOS_QTY describe listing quality (note the source spelling LENGHT)."
+    },
+    {
+      "path": "marketplace/geography",
+      "display_name": "Geography",
+      "description": "States and regions, concentration, and the geolocation dedupe recipe.",
+      "context_md": "# Geography\n\n## States and regions\n\nSellers and customers carry a zip code prefix, a city and a state (2-letter Brazilian UF codes). States group into five regions:\n\n- Sudeste: SP, RJ, MG, ES\n- Sul: PR, RS, SC\n- Nordeste: BA, PE, CE, MA, PB, RN, AL, PI, SE\n- Norte: PA, AM, TO, RO, AC, AP, RR\n- Centro-Oeste: GO, MT, MS, DF\n\nActivity is concentrated in the Sudeste: SP alone accounts for roughly 42% of customers and 60% of sellers.\n\n## Coordinates: the dedupe recipe\n\nGEOLOCATION maps zip prefixes to latitude/longitude points: about 1M rows for roughly 19,000 distinct prefixes, so many duplicate rows per prefix. Never join it directly, it fans out and inflates aggregates. To attach coordinates: collapse it to one row per prefix in a subquery (GROUP BY zip prefix with AVG latitude and AVG longitude), then LEFT JOIN on the prefix from SELLERS or CUSTOMERS.\n\nCoordinates are area-level, not exact addresses. Where GEOLOCATION's city or state disagrees with the seller or customer tables, prefer the seller and customer columns."
+    },
+    {
+      "path": "marketplace/measuring-sales",
+      "display_name": "Measuring sales",
+      "description": "Where money lives, the delivered-only rule, BV/GMV vocabulary, and counting rules.",
+      "context_md": "# Measuring sales\n\n## Where money lives\n\nSale amounts live on ORDER_ITEMS, one row per order line: PRICE is the item sale amount, FREIGHT_VALUE the shipping charged on that line. Never aggregate money at the ORDERS grain: an order spans one or more lines, possibly from different sellers.\n\n## Realized vs gross\n\nUnless the user explicitly asks otherwise, revenue, sales and business-volume questions cover delivered orders only (join ORDER_ITEMS to ORDERS and filter status 'delivered'). Freight is excluded from business volume; it is a separate charge.\n\n## Vocabulary\n\nBV, GMV, gross merchandise value, revenue and sales all mean the same thing here: the governed business_volume metric. Average basket questions map to the average_order_value metric. Use the metric definitions exactly; do not re-derive them. Metric filters scope the measure only: the delivered-only rule applies to money amounts, not to entity definitions. Customer membership, cohort assignment and first-order dates consider all orders regardless of status.\n\n## Counting rules\n\n- Orders: count distinct ORDER_ID.\n- People: count distinct CUSTOMER_UNIQUE_ID on CUSTOMERS, never the per-order CUSTOMER_ID. The repeat_customer_rate metric encodes the repeat-buyer rule.\n- Cancellations: the order_cancellation_rate metric runs over ALL orders regardless of status, not only delivered ones.\n\nAll amounts are in EUR; see the root rules for rendering."
+    },
+    {
+      "path": "marketplace/orders-and-delivery",
+      "display_name": "Orders and delivery",
+      "description": "Order status flow, lifecycle timestamps, on-time rules, and order quirks.",
+      "context_md": "# Orders and delivery\n\n## Status flow\n\nAn order moves through created and approved (transient: 5 and 2 rows respectively), then invoiced, processing, shipped, and finally delivered. Orders can also end as canceled or unavailable. About 97% of orders are delivered; realized sales are status 'delivered'.\n\n## Lifecycle timestamps (on ORDERS)\n\n- ORDER_PURCHASE_TIMESTAMP: when the order was placed.\n- ORDER_APPROVED_AT: payment approval.\n- ORDER_DELIVERED_CARRIER_DATE: handed to the logistics carrier.\n- ORDER_DELIVERED_CUSTOMER_DATE: delivered to the customer (null until delivered).\n- ORDER_ESTIMATED_DELIVERY_DATE: the delivery date promised to the customer at purchase.\n\nPer order item, SHIPPING_LIMIT_DATE on ORDER_ITEMS is the seller's deadline to hand that item to the carrier.\n\n## Delivery rules\n\n- Delivery days = days from ORDER_PURCHASE_TIMESTAMP to ORDER_DELIVERED_CUSTOMER_DATE.\n- An order is late when ORDER_DELIVERED_CUSTOMER_DATE is after ORDER_ESTIMATED_DELIVERY_DATE, on time otherwise. The governed late_delivery_rate metric encodes this rule; use it for any late-rate question.\n\n## Quirks\n\n- 8 delivered orders lack ORDER_DELIVERED_CUSTOMER_DATE; filter IS NOT NULL for delivery-time analysis.\n- About 775 orders have no order item rows at all (mostly canceled or unavailable): LEFT JOIN from ORDERS when item data might be absent."
+    },
+    {
+      "path": "marketplace/payments",
+      "display_name": "Payments",
+      "description": "Multi-record settlement, boleto and voucher explained, installments.",
+      "context_md": "# Payments\n\n## Settlement model\n\nOne row of ORDER_PAYMENTS per (order, payment sequence): an order can be settled by several records, for example a voucher plus a credit card. Amount paid per order is SUM(PAYMENT_VALUE) grouped by ORDER_ID.\n\n## Payment types\n\n- credit_card: about three quarters of payment records.\n- boleto: a prepaid Brazilian bank payment slip, paid at a bank or online (cash-like, no installments). About one fifth of records.\n- voucher: store credit.\n- debit_card, and not_defined (3 rows).\n\n## Installments\n\nPAYMENT_INSTALLMENTS is the number of installments the payment is split into; 1 means paid upfront. Installments are a credit card feature."
+    },
+    {
+      "path": "marketplace/reviews",
+      "display_name": "Reviews",
+      "description": "How the satisfaction survey works, score skew, and dedup rules.",
+      "context_md": "# Reviews\n\n## How the survey works\n\nOnce the customer receives the product, or the estimated delivery date passes, they get a satisfaction survey by email. This means reviews can exist for orders that were never delivered.\n\n## Scores\n\nREVIEW_SCORE runs from 1 (worst) to 5 (best). Scores skew positive: 5 is by far the largest bucket, with a secondary spike at 1.\n\n## Counting and joining\n\n- REVIEW_ID is NOT unique (a few duplicates exist): never use it as a join key or distinct-count key; dedup by ORDER_ID.\n- Roughly one review per order, but not every order has one and a few orders have more than one. LEFT JOIN from ORDERS.\n\n## Text\n\nComment titles and messages are optional and mostly in Portuguese; merchant names in the text are anonymized."
+    },
+    {
+      "path": "marketplace/seller-performance",
+      "display_name": "Seller performance",
+      "description": "The per-seller signals available in the data and how to compute them.",
+      "context_md": "# Seller performance\n\nAttribute everything to a seller via ORDER_ITEMS.SELLER_ID.\n\n## Sales activity\n\nVolume and recency come from ORDER_ITEMS (join on SELLER_ID): items sold, business volume per the governed metric, last sale date. A seller's sales window matters: the catalog spans April 2024 to late May 2026.\n\n## Delivery punctuality\n\nPer-seller on-time behavior follows the delivery rules in [orders and delivery](marketplace/orders-and-delivery): join the seller's order items to ORDERS and compare delivered vs estimated dates. SHIPPING_LIMIT_DATE also shows whether the seller handed items to the carrier on time.\n\n## Review quality\n\nReviews are order-level, not seller-level: a seller's review signal is the score of orders containing their items. For multi-seller orders the attribution is approximate; state that caveat when it applies."
+    }
+  ],
+  "tables": [
+    {
+      "schema_name": "MARKETPLACE",
+      "table_name": "CLOSED_DEALS",
+      "domain_path": "funnel",
+      "description": "A won deal: a lead that signed up and became a seller. One row per closed deal (one per lead and one per seller). Carries the seller's declared profile at acquisition and the sales reps who handled it. Declared fields are self-reported and largely sparse: has_company, has_gtin and average_stock are about 92% null; declared_monthly_revenue is often 0 and has a single outlier around 8.5M EUR.",
+      "synonyms": [
+        "closed deal",
+        "won deal",
+        "signed seller",
+        "seller acquisition"
+      ],
+      "grain": [
+        "MQL_ID"
+      ],
+      "sql": null,
+      "lineage_description": null,
+      "source_tables": [],
+      "source_sql": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 842,
+      "columns": [
+        {
+          "name": "MQL_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 1,
+          "description": "Lead this deal converted from.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "SELLER_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 2,
+          "description": "Seller created when the deal closed. Bridge to the marketplace (partial: about 380 of 842 appear in the marketplace tables).",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "SDR_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 3,
+          "description": "Sales development representative who qualified the lead.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "SR_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 4,
+          "description": "Sales representative who closed the deal.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "WON_DATE",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "ordinal": 5,
+          "description": "Date the deal closed. Treat as a date; a few rows carry a synthetic 02:00/03:00 time that is Brazil midnight stored as UTC, not a real time of day.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "BUSINESS_SEGMENT",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 6,
+          "description": "Lead's industry vertical (e.g. home_appliances, watches, construction_tools). Reported on contact and used for sales-team segmentation. Distinct from LEAD_TYPE (sales-stage classification) and BUSINESS_TYPE (reseller vs manufacturer).",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "LEAD_TYPE",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 7,
+          "description": "Sales-stage classification assigned by the SDR, reflecting the lead's maturity and online footprint. Values: online_medium, online_big, industry, offline, online_small, online_beginner, online_top, other. Distinct from BUSINESS_TYPE (reseller vs manufacturer) and BUSINESS_SEGMENT (industry vertical).",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "LEAD_BEHAVIOUR_PROFILE",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 8,
+          "description": "DISC-style behavioral profile assigned by the SDR. Values: cat, eagle, wolf, shark (shark tends to carry the highest deal size). Can be multi-valued, e.g. 'cat,wolf'; about 21% null. Match with LIKE or split when filtering on a single profile.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "HAS_COMPANY",
+          "data_type": "BOOLEAN",
+          "nullable": true,
+          "ordinal": 9,
+          "description": "Whether the lead has a registered company. Mostly null.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "HAS_GTIN",
+          "data_type": "BOOLEAN",
+          "nullable": true,
+          "ordinal": 10,
+          "description": "Whether the lead has product barcodes (GTIN). Mostly null.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "AVERAGE_STOCK",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 11,
+          "description": "Declared stock bracket. Values: 1-5, 5-20, 20-50, 50-200, 200+, unknown. Mostly null.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "BUSINESS_TYPE",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 12,
+          "description": "Self-reported nature of the lead's business. Values: reseller, manufacturer, other. Distinct from LEAD_TYPE (SDR-assigned sales-stage classification) and BUSINESS_SEGMENT (industry vertical).",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "DECLARED_PRODUCT_CATALOG_SIZE",
+          "data_type": "FLOAT",
+          "nullable": true,
+          "ordinal": 13,
+          "description": "Catalog size the lead declared at acquisition.",
+          "unit": "count",
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "DECLARED_MONTHLY_REVENUE",
+          "data_type": "FLOAT",
+          "nullable": true,
+          "ordinal": 14,
+          "description": "Monthly revenue the lead declared at acquisition. Self-reported, not actual sales.",
+          "unit": "EUR",
+          "synonyms": [],
+          "source": "introspected"
+        }
+      ]
+    },
+    {
+      "schema_name": "MARKETPLACE",
+      "table_name": "CUSTOMERS",
+      "domain_path": "marketplace",
+      "description": "A buyer on the marketplace. One row per customer per order: the customer id is issued for a single order, while the customer unique id identifies the real person across their orders.\n\nOwner: analytics team. Questions: #data-asks-anything.",
+      "synonyms": [
+        "customer",
+        "buyer",
+        "shopper"
+      ],
+      "grain": [
+        "CUSTOMER_ID"
+      ],
+      "sql": null,
+      "lineage_description": null,
+      "source_tables": [],
+      "source_sql": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 99441,
+      "columns": [
+        {
+          "name": "CUSTOMER_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 1,
+          "description": "Per-order identifier of the customer. Unique per row; one is created for each order. Never count people with this column.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "CUSTOMER_UNIQUE_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 2,
+          "description": "Stable identifier of the real person across all their orders. Count distinct customers (people) with this column.",
+          "unit": null,
+          "synonyms": [
+            "person id",
+            "unique customer"
+          ],
+          "source": "introspected"
+        },
+        {
+          "name": "CUSTOMER_ZIP_CODE_PREFIX",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 3,
+          "description": "First digits of the customer's postal code, indicating their area. Join key to the geolocation lookup (dedup it first, see the marketplace domain notes).",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "CUSTOMER_CITY",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 4,
+          "description": "Customer's city.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "CUSTOMER_STATE",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 5,
+          "description": "Customer's state (region), as a 2-letter code (for example SP, RJ, MG). SP is by far the most common. Common alternate names: S\u00e3o Paulo (SP), Rio de Janeiro (RJ), Minas Gerais (MG).",
+          "unit": null,
+          "synonyms": [
+            "S\u00e3o Paulo",
+            "Sao Paulo",
+            "Rio de Janeiro",
+            "Minas Gerais",
+            "Bahia",
+            "Paran\u00e1",
+            "Parana",
+            "Rio Grande do Sul",
+            "Santa Catarina",
+            "Pernambuco",
+            "Cear\u00e1",
+            "Ceara",
+            "Distrito Federal"
+          ],
+          "source": "introspected"
+        }
+      ]
+    },
+    {
+      "schema_name": "MARKETPLACE",
+      "table_name": "GEOLOCATION",
+      "domain_path": "marketplace",
+      "description": "Raw zip-prefix geolocation lookup: maps Brazilian zip code prefixes to latitude/longitude points. About 1M rows with MANY duplicate rows per prefix: never join this table directly, it fans out and inflates aggregates. Collapse it to one row per prefix first (GROUP BY zip prefix, AVG latitude and longitude in a subquery), then LEFT JOIN on the prefix from SELLERS or CUSTOMERS. Coordinates are area-level, not exact addresses. Its city/state values can disagree with the seller/customer tables; prefer the seller/customer columns for city and state.",
+      "synonyms": [
+        "geolocation",
+        "geo lookup",
+        "coordinates"
+      ],
+      "grain": [],
+      "sql": null,
+      "lineage_description": null,
+      "source_tables": [],
+      "source_sql": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 1000163,
+      "columns": [
+        {
+          "name": "GEOLOCATION_ZIP_CODE_PREFIX",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 1,
+          "description": "Zip code prefix. NOT unique: many rows per prefix; dedup before joining.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "GEOLOCATION_LAT",
+          "data_type": "FLOAT",
+          "nullable": true,
+          "ordinal": 2,
+          "description": "Latitude of one observed point in the zip prefix area. Average per prefix for a usable coordinate.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "GEOLOCATION_LNG",
+          "data_type": "FLOAT",
+          "nullable": true,
+          "ordinal": 3,
+          "description": "Longitude of one observed point in the zip prefix area. Average per prefix for a usable coordinate.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "GEOLOCATION_CITY",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 4,
+          "description": "City label of the observed point. Can disagree with seller/customer city; prefer those columns.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "GEOLOCATION_STATE",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 5,
+          "description": "State code of the observed point. Can disagree with seller/customer state; prefer those columns.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        }
+      ]
+    },
+    {
+      "schema_name": "MARKETPLACE",
+      "table_name": "MARKETING_QUALIFIED_LEADS",
+      "domain_path": "funnel",
+      "description": "A marketing qualified lead: a prospective seller who signed up and was qualified for sales follow-up. One row per lead. A lead may later convert into a closed deal.",
+      "synonyms": [
+        "lead",
+        "mql",
+        "marketing qualified lead",
+        "prospect"
+      ],
+      "grain": [
+        "MQL_ID"
+      ],
+      "sql": null,
+      "lineage_description": null,
+      "source_tables": [],
+      "source_sql": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 8000,
+      "columns": [
+        {
+          "name": "MQL_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 1,
+          "description": "Unique identifier of the marketing qualified lead.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "FIRST_CONTACT_DATE",
+          "data_type": "DATE",
+          "nullable": true,
+          "ordinal": 2,
+          "description": "Date of first contact with the lead.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "LANDING_PAGE_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 3,
+          "description": "Landing page recorded on this lead row. One value per lead row (the lead may have visited other landing pages, but only one is stored here, typically the one tied to the qualification event). Do not infer multi-touch attribution from this field alone.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "ORIGIN",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 4,
+          "description": "Acquisition channel. Values: organic_search, paid_search, social, affiliate, direct_traffic, email, referral, other, display, other_publicities.",
+          "unit": null,
+          "synonyms": [
+            "acquisition channel",
+            "channel",
+            "source"
+          ],
+          "source": "introspected"
+        }
+      ]
+    },
+    {
+      "schema_name": "MARKETPLACE",
+      "table_name": "ORDER_ITEMS",
+      "domain_path": "marketplace",
+      "description": "A single product sold by one seller within an order, i.e. one order line. One row per (order, order line number). This is the sale grain that carries business volume: price is the item sale amount and freight is shipping.\n\nOwner: data platform team. Questions: #data-asks-anything.",
+      "synonyms": [
+        "order item",
+        "offer",
+        "order line",
+        "line item"
+      ],
+      "grain": [
+        "ORDER_ID",
+        "ORDER_ITEM_ID"
+      ],
+      "sql": null,
+      "lineage_description": null,
+      "source_tables": [],
+      "source_sql": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 112650,
+      "columns": [
+        {
+          "name": "ORDER_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 1,
+          "description": "Order this order item belongs to.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "ORDER_ITEM_ID",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "ordinal": 2,
+          "description": "Sequence number of the line within its order (1, 2, 3, ...).",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "PRODUCT_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 3,
+          "description": "Product sold on this order item.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "SELLER_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 4,
+          "description": "Seller that sells and fulfills this order item.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "SHIPPING_LIMIT_DATE",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "ordinal": 5,
+          "description": "Deadline by which the seller must hand the order item to the carrier.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "PRICE",
+          "data_type": "FLOAT",
+          "nullable": true,
+          "ordinal": 6,
+          "description": "Sale amount of this order item, excluding shipping. The basis of business volume (also called revenue, sales or GMV): sum it over delivered orders per the business_volume metric.",
+          "unit": "EUR",
+          "synonyms": [
+            "sale price",
+            "item amount",
+            "revenue",
+            "sales",
+            "gmv"
+          ],
+          "source": "introspected"
+        },
+        {
+          "name": "FREIGHT_VALUE",
+          "data_type": "FLOAT",
+          "nullable": true,
+          "ordinal": 7,
+          "description": "Shipping amount charged on this order item. Excluded from business volume.",
+          "unit": "EUR",
+          "synonyms": [
+            "shipping",
+            "shipping cost"
+          ],
+          "source": "introspected"
+        }
+      ]
+    },
+    {
+      "schema_name": "MARKETPLACE",
+      "table_name": "ORDER_PAYMENTS",
+      "domain_path": "marketplace",
+      "description": "A payment record against an order. One row per (order, payment sequence): an order can be settled in several records, for example a voucher plus a card. Installments capture deferred payment. To get the amount paid per order, sum payment value grouped by order.",
+      "synonyms": [
+        "payment",
+        "order payment"
+      ],
+      "grain": [
+        "ORDER_ID",
+        "PAYMENT_SEQUENTIAL"
+      ],
+      "sql": null,
+      "lineage_description": null,
+      "source_tables": [],
+      "source_sql": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 103886,
+      "columns": [
+        {
+          "name": "ORDER_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 1,
+          "description": "Order this payment settles.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "PAYMENT_SEQUENTIAL",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "ordinal": 2,
+          "description": "Sequence number of this payment record within the order.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "PAYMENT_TYPE",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 3,
+          "description": "Method of payment. Values: credit_card, boleto, voucher, debit_card, not_defined. boleto is a prepaid bank payment slip; voucher is store credit. Credit card dominates (about three quarters of payment records), then boleto (about one fifth).",
+          "unit": null,
+          "synonyms": [
+            "payment method"
+          ],
+          "source": "introspected"
+        },
+        {
+          "name": "PAYMENT_INSTALLMENTS",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "ordinal": 4,
+          "description": "Number of installments the payment is split into.",
+          "unit": "count",
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "PAYMENT_VALUE",
+          "data_type": "FLOAT",
+          "nullable": true,
+          "ordinal": 5,
+          "description": "Amount settled by this payment record.",
+          "unit": "EUR",
+          "synonyms": [
+            "amount paid"
+          ],
+          "source": "introspected"
+        }
+      ]
+    },
+    {
+      "schema_name": "MARKETPLACE",
+      "table_name": "ORDER_REVIEWS",
+      "domain_path": "marketplace",
+      "description": "A customer satisfaction review of an order, scored 1 to 5. Roughly one review per order, though a small number of orders carry more than one. Review id is not strictly unique (a few duplicates exist): never treat it as a key; dedup by order id when counting distinct reviews. Higher score means happier customer.",
+      "synonyms": [
+        "review",
+        "rating",
+        "feedback"
+      ],
+      "grain": [],
+      "sql": null,
+      "lineage_description": null,
+      "source_tables": [],
+      "source_sql": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 99224,
+      "columns": [
+        {
+          "name": "REVIEW_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 1,
+          "description": "Identifier of the review. Not strictly unique: do NOT use as a join key or distinct-count key; dedup by ORDER_ID instead.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "ORDER_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 2,
+          "description": "Order this review is about. Use as the dedup key when counting distinct reviews.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "REVIEW_SCORE",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "ordinal": 3,
+          "description": "Satisfaction score from 1 (worst) to 5 (best). Scores skew positive: 5 is by far the largest bucket, with a secondary spike at 1.",
+          "unit": "score",
+          "synonyms": [
+            "rating",
+            "stars"
+          ],
+          "source": "introspected"
+        },
+        {
+          "name": "REVIEW_COMMENT_TITLE",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 4,
+          "description": "Optional short title the customer gave the review, mostly in Portuguese.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "REVIEW_COMMENT_MESSAGE",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 5,
+          "description": "Optional free-text body of the review, mostly in Portuguese. Merchant names in the text are anonymized.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "REVIEW_CREATION_DATE",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "ordinal": 6,
+          "description": "When the review was submitted.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "REVIEW_ANSWER_TIMESTAMP",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "ordinal": 7,
+          "description": "When the review was answered.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        }
+      ]
+    },
+    {
+      "schema_name": "MARKETPLACE",
+      "table_name": "ORDERS",
+      "domain_path": "marketplace",
+      "description": "A purchase placed by a customer. One row per order. An order contains one or more order items. Status tracks the order through fulfillment; money lives on ORDER_ITEMS, not here. About 775 orders have no order item rows at all (mostly canceled or unavailable): LEFT JOIN from orders when item data might be absent.\n\nOwner: data platform team. Questions: #data-asks-anything.",
+      "synonyms": [
+        "order",
+        "purchase",
+        "transaction"
+      ],
+      "grain": [
+        "ORDER_ID"
+      ],
+      "sql": null,
+      "lineage_description": null,
+      "source_tables": [],
+      "source_sql": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 99441,
+      "columns": [
+        {
+          "name": "ORDER_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 1,
+          "description": "Unique identifier of the order.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "CUSTOMER_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 2,
+          "description": "Customer record that placed the order. Per-order id: use CUSTOMER_UNIQUE_ID on CUSTOMERS to identify the real person.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "ORDER_STATUS",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 3,
+          "description": "Fulfillment status of the order. Values: delivered, shipped, canceled, unavailable, invoiced, processing, created, approved. About 97% of orders are delivered. Realized sales are status 'delivered'.",
+          "unit": null,
+          "synonyms": [
+            "status",
+            "order status"
+          ],
+          "source": "introspected"
+        },
+        {
+          "name": "ORDER_PURCHASE_TIMESTAMP",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "ordinal": 4,
+          "description": "When the order was placed.",
+          "unit": null,
+          "synonyms": [
+            "order date",
+            "purchase date"
+          ],
+          "source": "introspected"
+        },
+        {
+          "name": "ORDER_APPROVED_AT",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "ordinal": 5,
+          "description": "When the order payment was approved.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "ORDER_DELIVERED_CARRIER_DATE",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "ordinal": 6,
+          "description": "When the order was handed to the logistics carrier.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "ORDER_DELIVERED_CUSTOMER_DATE",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "ordinal": 7,
+          "description": "When the order was delivered to the customer. Null if not yet delivered (and missing on 8 delivered orders; filter IS NOT NULL for delivery-time analysis). Delivery days = days from ORDER_PURCHASE_TIMESTAMP to this timestamp.",
+          "unit": null,
+          "synonyms": [
+            "delivery date",
+            "delivered at"
+          ],
+          "source": "introspected"
+        },
+        {
+          "name": "ORDER_ESTIMATED_DELIVERY_DATE",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "ordinal": 8,
+          "description": "Delivery date promised to the customer at purchase. An order is late when ORDER_DELIVERED_CUSTOMER_DATE is after this date, on time otherwise.",
+          "unit": null,
+          "synonyms": [
+            "promised delivery date",
+            "estimated delivery"
+          ],
+          "source": "introspected"
+        }
+      ]
+    },
+    {
+      "schema_name": "MARKETPLACE",
+      "table_name": "PRODUCT_CATEGORY_NAME_TRANSLATION",
+      "domain_path": "marketplace",
+      "description": "Lookup table mapping raw Portuguese product category labels to readable English labels. One row per category. LEFT JOIN from PRODUCTS and COALESCE the English name with the raw value; a few categories have no translation row.",
+      "synonyms": [
+        "category translation",
+        "category lookup"
+      ],
+      "grain": [
+        "PRODUCT_CATEGORY_NAME"
+      ],
+      "sql": null,
+      "lineage_description": null,
+      "source_tables": [],
+      "source_sql": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 71,
+      "columns": [
+        {
+          "name": "PRODUCT_CATEGORY_NAME",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 1,
+          "description": "Raw category label in Portuguese. Join key from PRODUCTS.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "PRODUCT_CATEGORY_NAME_ENGLISH",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 2,
+          "description": "Readable English category label (snake_case), e.g. health_beauty, bed_bath_table, furniture_decor.",
+          "unit": null,
+          "synonyms": [
+            "category",
+            "english category"
+          ],
+          "source": "introspected"
+        }
+      ]
+    },
+    {
+      "schema_name": "MARKETPLACE",
+      "table_name": "PRODUCTS",
+      "domain_path": "marketplace",
+      "description": "An item listed in the marketplace catalog. One row per product. Category is stored in Portuguese; the English label comes from the category translation lookup. Physical attributes (weight, dimensions) drive shipping.",
+      "synonyms": [
+        "product",
+        "item",
+        "article",
+        "sku",
+        "catalog"
+      ],
+      "grain": [
+        "PRODUCT_ID"
+      ],
+      "sql": null,
+      "lineage_description": null,
+      "source_tables": [],
+      "source_sql": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 32951,
+      "columns": [
+        {
+          "name": "PRODUCT_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 1,
+          "description": "Unique identifier of the product.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "PRODUCT_CATEGORY_NAME",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 2,
+          "description": "Raw product category label in Portuguese (snake_case). For the readable English label, LEFT JOIN PRODUCT_CATEGORY_NAME_TRANSLATION and COALESCE the English name with this raw value. About 70 distinct categories (health_beauty, bed_bath_table, furniture_decor, housewares, sports_leisure and others); query the column for the full list rather than assuming a value exists. About 610 products have no category (NULL); when reporting by category, keep these as their own NULL-label group and do not relabel them.",
+          "unit": null,
+          "synonyms": [
+            "category",
+            "product category",
+            "department"
+          ],
+          "source": "introspected"
+        },
+        {
+          "name": "PRODUCT_NAME_LENGHT",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "ordinal": 3,
+          "description": "Character length of the product name on the listing. Note: the source column is spelled PRODUCT_NAME_LENGHT.",
+          "unit": "count",
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "PRODUCT_DESCRIPTION_LENGHT",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "ordinal": 4,
+          "description": "Character length of the product description on the listing. Note: the source column is spelled PRODUCT_DESCRIPTION_LENGHT.",
+          "unit": "count",
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "PRODUCT_PHOTOS_QTY",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "ordinal": 5,
+          "description": "Number of photos on the product listing.",
+          "unit": "count",
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "PRODUCT_WEIGHT_G",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "ordinal": 6,
+          "description": "Product package weight in grams.",
+          "unit": "g",
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "PRODUCT_LENGTH_CM",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "ordinal": 7,
+          "description": "Product package length.",
+          "unit": "cm",
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "PRODUCT_HEIGHT_CM",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "ordinal": 8,
+          "description": "Product package height.",
+          "unit": "cm",
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "PRODUCT_WIDTH_CM",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "ordinal": 9,
+          "description": "Product package width.",
+          "unit": "cm",
+          "synonyms": [],
+          "source": "introspected"
+        }
+      ]
+    },
+    {
+      "schema_name": "MARKETPLACE",
+      "table_name": "SELLERS",
+      "domain_path": "marketplace",
+      "description": "An independent merchant that lists products and fulfills order items on the marketplace. One row per seller.",
+      "synonyms": [
+        "seller",
+        "merchant",
+        "vendor"
+      ],
+      "grain": [
+        "SELLER_ID"
+      ],
+      "sql": null,
+      "lineage_description": null,
+      "source_tables": [],
+      "source_sql": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 3095,
+      "columns": [
+        {
+          "name": "SELLER_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 1,
+          "description": "Unique identifier of the seller.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "SELLER_ZIP_CODE_PREFIX",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 2,
+          "description": "First digits of the seller's postal code, indicating their area. Join key to the geolocation lookup (dedup it first, see the marketplace domain notes).",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "SELLER_CITY",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 3,
+          "description": "City the seller is based in.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "SELLER_STATE",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 4,
+          "description": "State (region) the seller is based in, as a 2-letter code (for example SP, RJ, MG). SP is by far the most common. Common alternate names: S\u00e3o Paulo (SP), Rio de Janeiro (RJ), Minas Gerais (MG).",
+          "unit": null,
+          "synonyms": [
+            "S\u00e3o Paulo",
+            "Sao Paulo",
+            "Rio de Janeiro",
+            "Minas Gerais",
+            "Bahia",
+            "Paran\u00e1",
+            "Parana",
+            "Rio Grande do Sul",
+            "Santa Catarina",
+            "Pernambuco",
+            "Cear\u00e1",
+            "Ceara",
+            "Distrito Federal"
+          ],
+          "source": "introspected"
+        }
+      ]
+    }
+  ],
+  "joins": [
+    {
+      "from_schema": "MARKETPLACE",
+      "from_table": "ORDER_ITEMS",
+      "to_schema": "MARKETPLACE",
+      "to_table": "ORDERS",
+      "condition_sql": "MARKETPLACE.ORDER_ITEMS.ORDER_ID = MARKETPLACE.ORDERS.ORDER_ID",
+      "column_pairs": [
+        {
+          "from_column": "ORDER_ID",
+          "to_column": "ORDER_ID"
+        }
+      ],
+      "description": "[many_to_one] Each order item belongs to one order; an order contains one or more items.",
+      "cardinality": null,
+      "source": "manual"
+    },
+    {
+      "from_schema": "MARKETPLACE",
+      "from_table": "ORDER_ITEMS",
+      "to_schema": "MARKETPLACE",
+      "to_table": "PRODUCTS",
+      "condition_sql": "MARKETPLACE.ORDER_ITEMS.PRODUCT_ID = MARKETPLACE.PRODUCTS.PRODUCT_ID",
+      "column_pairs": [
+        {
+          "from_column": "PRODUCT_ID",
+          "to_column": "PRODUCT_ID"
+        }
+      ],
+      "description": "[many_to_one] Each order item sells one product; a product appears in many order items.",
+      "cardinality": null,
+      "source": "manual"
+    },
+    {
+      "from_schema": "MARKETPLACE",
+      "from_table": "ORDER_ITEMS",
+      "to_schema": "MARKETPLACE",
+      "to_table": "SELLERS",
+      "condition_sql": "MARKETPLACE.ORDER_ITEMS.SELLER_ID = MARKETPLACE.SELLERS.SELLER_ID",
+      "column_pairs": [
+        {
+          "from_column": "SELLER_ID",
+          "to_column": "SELLER_ID"
+        }
+      ],
+      "description": "[many_to_one] Each order item is sold and fulfilled by one seller; a seller has many order items.",
+      "cardinality": null,
+      "source": "manual"
+    },
+    {
+      "from_schema": "MARKETPLACE",
+      "from_table": "ORDERS",
+      "to_schema": "MARKETPLACE",
+      "to_table": "CUSTOMERS",
+      "condition_sql": "MARKETPLACE.ORDERS.CUSTOMER_ID = MARKETPLACE.CUSTOMERS.CUSTOMER_ID",
+      "column_pairs": [
+        {
+          "from_column": "CUSTOMER_ID",
+          "to_column": "CUSTOMER_ID"
+        }
+      ],
+      "description": "[many_to_one] Each order is placed by one customer record. Customer records are per order; the real person is CUSTOMER_UNIQUE_ID on CUSTOMERS.",
+      "cardinality": null,
+      "source": "manual"
+    },
+    {
+      "from_schema": "MARKETPLACE",
+      "from_table": "ORDER_PAYMENTS",
+      "to_schema": "MARKETPLACE",
+      "to_table": "ORDERS",
+      "condition_sql": "MARKETPLACE.ORDER_PAYMENTS.ORDER_ID = MARKETPLACE.ORDERS.ORDER_ID",
+      "column_pairs": [
+        {
+          "from_column": "ORDER_ID",
+          "to_column": "ORDER_ID"
+        }
+      ],
+      "description": "[many_to_one] Each payment record settles one order; an order can have several payment records.",
+      "cardinality": null,
+      "source": "manual"
+    },
+    {
+      "from_schema": "MARKETPLACE",
+      "from_table": "ORDER_REVIEWS",
+      "to_schema": "MARKETPLACE",
+      "to_table": "ORDERS",
+      "condition_sql": "MARKETPLACE.ORDER_REVIEWS.ORDER_ID = MARKETPLACE.ORDERS.ORDER_ID",
+      "column_pairs": [
+        {
+          "from_column": "ORDER_ID",
+          "to_column": "ORDER_ID"
+        }
+      ],
+      "description": "[many_to_one] Each review is about one order; an order usually has one review. Review ids are not unique; dedup by order id.",
+      "cardinality": null,
+      "source": "manual"
+    },
+    {
+      "from_schema": "MARKETPLACE",
+      "from_table": "CLOSED_DEALS",
+      "to_schema": "MARKETPLACE",
+      "to_table": "MARKETING_QUALIFIED_LEADS",
+      "condition_sql": "MARKETPLACE.CLOSED_DEALS.MQL_ID = MARKETPLACE.MARKETING_QUALIFIED_LEADS.MQL_ID",
+      "column_pairs": [
+        {
+          "from_column": "MQL_ID",
+          "to_column": "MQL_ID"
+        }
+      ],
+      "description": "[one_to_one] Each closed deal converted from exactly one lead.",
+      "cardinality": null,
+      "source": "manual"
+    },
+    {
+      "from_schema": "MARKETPLACE",
+      "from_table": "CLOSED_DEALS",
+      "to_schema": "MARKETPLACE",
+      "to_table": "SELLERS",
+      "condition_sql": "MARKETPLACE.CLOSED_DEALS.SELLER_ID = MARKETPLACE.SELLERS.SELLER_ID",
+      "column_pairs": [
+        {
+          "from_column": "SELLER_ID",
+          "to_column": "SELLER_ID"
+        }
+      ],
+      "description": "[one_to_one] Bridges the acquisition funnel to the marketplace: each closed deal creates one seller. Partial bridge: only about 380 of the 842 closed-deal sellers appear in the marketplace tables (different sampling windows). State this caveat when combining funnel and marketplace data.",
+      "cardinality": null,
+      "source": "manual"
+    },
+    {
+      "from_schema": "MARKETPLACE",
+      "from_table": "PRODUCTS",
+      "to_schema": "MARKETPLACE",
+      "to_table": "PRODUCT_CATEGORY_NAME_TRANSLATION",
+      "condition_sql": "MARKETPLACE.PRODUCTS.PRODUCT_CATEGORY_NAME = MARKETPLACE.PRODUCT_CATEGORY_NAME_TRANSLATION.PRODUCT_CATEGORY_NAME",
+      "column_pairs": [
+        {
+          "from_column": "PRODUCT_CATEGORY_NAME",
+          "to_column": "PRODUCT_CATEGORY_NAME"
+        }
+      ],
+      "description": "[many_to_one] Maps the raw Portuguese category to its English label. LEFT JOIN and COALESCE the English name with the raw value; a few categories have no translation row.",
+      "cardinality": null,
+      "source": "manual"
+    },
+    {
+      "from_schema": "MARKETPLACE",
+      "from_table": "SELLERS",
+      "to_schema": "MARKETPLACE",
+      "to_table": "GEOLOCATION",
+      "condition_sql": "MARKETPLACE.SELLERS.SELLER_ZIP_CODE_PREFIX = MARKETPLACE.GEOLOCATION.GEOLOCATION_ZIP_CODE_PREFIX",
+      "column_pairs": [
+        {
+          "from_column": "SELLER_ZIP_CODE_PREFIX",
+          "to_column": "GEOLOCATION_ZIP_CODE_PREFIX"
+        }
+      ],
+      "description": "[many_to_one after dedup] Seller area coordinates. GEOLOCATION has many duplicate rows per zip prefix: NEVER join it directly (fan-out). Collapse it to one row per prefix in a subquery first (GROUP BY prefix, AVG latitude and longitude), then LEFT JOIN.",
+      "cardinality": null,
+      "source": "manual"
+    },
+    {
+      "from_schema": "MARKETPLACE",
+      "from_table": "CUSTOMERS",
+      "to_schema": "MARKETPLACE",
+      "to_table": "GEOLOCATION",
+      "condition_sql": "MARKETPLACE.CUSTOMERS.CUSTOMER_ZIP_CODE_PREFIX = MARKETPLACE.GEOLOCATION.GEOLOCATION_ZIP_CODE_PREFIX",
+      "column_pairs": [
+        {
+          "from_column": "CUSTOMER_ZIP_CODE_PREFIX",
+          "to_column": "GEOLOCATION_ZIP_CODE_PREFIX"
+        }
+      ],
+      "description": "[many_to_one after dedup] Customer area coordinates. GEOLOCATION has many duplicate rows per zip prefix: NEVER join it directly (fan-out). Collapse it to one row per prefix in a subquery first (GROUP BY prefix, AVG latitude and longitude), then LEFT JOIN.",
+      "cardinality": null,
+      "source": "manual"
+    }
+  ],
+  "metrics": [
+    {
+      "name": "average_order_value",
+      "display_name": "Average order value (AOV)",
+      "expression": "SUM(\"PRICE\") / COUNT(DISTINCT \"ORDER_ID\")",
+      "domain_path": "marketplace",
+      "description": "Business volume divided by the number of distinct delivered orders. Excludes freight. In EUR.",
+      "table_schema": "MARKETPLACE",
+      "table_name": "ORDER_ITEMS",
+      "filters": "MARKETPLACE.ORDERS.ORDER_STATUS = 'delivered' (requires JOIN ORDER_ITEMS.ORDER_ID = ORDERS.ORDER_ID)",
+      "unit": "EUR",
+      "synonyms": [
+        "AOV",
+        "average basket",
+        "average basket size"
+      ],
+      "notes": null,
+      "precomputed_in": null
+    },
+    {
+      "name": "business_volume",
+      "display_name": "Business volume (BV)",
+      "expression": "SUM(\"PRICE\")",
+      "domain_path": "marketplace",
+      "description": "Sum of order item price over delivered orders, excluding freight. In EUR. Also called GMV, revenue or sales.",
+      "table_schema": "MARKETPLACE",
+      "table_name": "ORDER_ITEMS",
+      "filters": "MARKETPLACE.ORDERS.ORDER_STATUS = 'delivered' (requires JOIN ORDER_ITEMS.ORDER_ID = ORDERS.ORDER_ID)",
+      "unit": "EUR",
+      "synonyms": [
+        "BV",
+        "GMV",
+        "gross merchandise value",
+        "revenue",
+        "sales"
+      ],
+      "notes": null,
+      "precomputed_in": null
+    },
+    {
+      "name": "late_delivery_rate",
+      "display_name": "Late delivery rate",
+      "expression": "100 * SUM(CASE WHEN \"ORDER_DELIVERED_CUSTOMER_DATE\" > \"ORDER_ESTIMATED_DELIVERY_DATE\" THEN 1 ELSE 0 END) / COUNT(*)",
+      "domain_path": "marketplace",
+      "description": "Share of delivered orders that arrived after their estimated delivery date, as a percentage.",
+      "table_schema": "MARKETPLACE",
+      "table_name": "ORDERS",
+      "filters": "\"ORDER_STATUS\" = 'delivered' AND \"ORDER_DELIVERED_CUSTOMER_DATE\" IS NOT NULL",
+      "unit": "%",
+      "synonyms": [
+        "late rate",
+        "delayed delivery rate"
+      ],
+      "notes": null,
+      "precomputed_in": null
+    },
+    {
+      "name": "order_cancellation_rate",
+      "display_name": "Order cancellation rate",
+      "expression": "100 * SUM(CASE WHEN \"ORDER_STATUS\" = 'canceled' THEN 1 ELSE 0 END) / COUNT(*)",
+      "domain_path": "marketplace",
+      "description": "Share of all orders whose status is 'canceled', as a percentage of all orders regardless of status (no delivered-only filter).",
+      "table_schema": "MARKETPLACE",
+      "table_name": "ORDERS",
+      "filters": null,
+      "unit": "%",
+      "synonyms": [
+        "cancellation rate",
+        "cancel rate"
+      ],
+      "notes": null,
+      "precomputed_in": null
+    },
+    {
+      "name": "repeat_customer_rate",
+      "display_name": "Repeat customer rate",
+      "expression": "100 * (COUNT DISTINCT CUSTOMER_UNIQUE_ID with >= 2 delivered orders) / (COUNT DISTINCT CUSTOMER_UNIQUE_ID with >= 1 delivered order)",
+      "domain_path": "marketplace",
+      "description": "Share of real customers who placed more than one delivered order: distinct CUSTOMER_UNIQUE_ID with two or more delivered orders, divided by distinct CUSTOMER_UNIQUE_ID with at least one delivered order, as a percentage. Count people by CUSTOMER_UNIQUE_ID, never by the per-order CUSTOMER_ID.",
+      "table_schema": "MARKETPLACE",
+      "table_name": "CUSTOMERS",
+      "filters": "MARKETPLACE.ORDERS.ORDER_STATUS = 'delivered' (requires JOIN CUSTOMERS.CUSTOMER_ID = ORDERS.CUSTOMER_ID)",
+      "unit": "%",
+      "synonyms": [
+        "repeat rate",
+        "returning customer rate"
+      ],
+      "notes": null,
+      "precomputed_in": null
+    }
+  ]
+}

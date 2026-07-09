@@ -1,0 +1,609 @@
+{
+  "domains": [
+    {
+      "path": "",
+      "display_name": "Jaffle Shop",
+      "description": "Global context for the Jaffle Shop cafe chain dataset.",
+      "context_md": "Jaffle Shop is a cafe chain with six locations across the US. It sells jaffles (pressed toasted sandwiches) and beverages. Every sale rings up as an order at one store, placed by one customer, containing one or more items off the menu.\n\n## How the data is organized\n\n- [sales](sales): orders and the items inside them. The menu (products and supply costs) lives in its child domain.\n- [customers](customers): who buys, and how to measure customer behavior.\n- [stores](stores): the six locations.\n\nThe bridge between areas is the order: it links a customer, a store, and items. Any \"by store\" or \"by customer\" cut of a sales figure goes through `ORDERS`.\n\n## Rules that apply to every question\n\n- Monetary amounts are in USD.\n- Revenue and order values are pre-tax: use `SUBTOTAL`. `ORDER_TOTAL` includes sales tax, which varies by store, so totals including tax are not comparable across stores.\n- Core grain hierarchy: a customer places orders at a store; an order contains order items; each item is one menu product.\n\n## Answering business terms\n\nWhen a question uses a business qualifier or membership term that is not a column (for example \"active\", \"regular\", \"top\", \"lapsed\", \"new\"), first open the relevant domain document(s) and use any definition found there. If no document defines the term, do not pick a threshold silently: state the assumption you would make, name the other reasonable readings (threshold and time window), and ask the user to confirm or define it. Prefer asking over guessing whenever the choice would materially change the answer."
+    },
+    {
+      "path": "sales",
+      "display_name": "Sales",
+      "description": "Orders and the items inside them.",
+      "context_md": "A sale is one order: a register transaction at one store by one customer, holding one or more items. Item-level questions (what was ordered, product mix) go through `ORDER_ITEMS` joined to the menu; order-level questions (revenue, order counts, basket size) stay on `ORDERS`, whose money columns are already order-level totals. Do not sum item prices to rebuild an order's value; `SUBTOTAL` already carries it.\n\nChild domain:\n\n- [menu](sales/menu): the products on the menu and what they cost us to make."
+    },
+    {
+      "path": "sales/menu",
+      "display_name": "Menu",
+      "description": "The products on the menu and their supply costs.",
+      "context_md": "The menu is small and fixed: jaffles and beverages (`PRODUCT_TYPE`). \"Best sellers\" or product-mix questions count `ORDER_ITEMS` rows by product. The cost side lives in `SUPPLIES`: several supply rows per product, so a product's unit cost is the SUM of its supply costs, never a single row's value."
+    },
+    {
+      "path": "customers",
+      "display_name": "Customers",
+      "description": "Who buys, and how to measure customer behavior.",
+      "context_md": "One row per known customer, identified across visits and stores. The table carries identity only; everything behavioral (how often they come, what they spend, when they were last seen) is derived from their orders.\n\nChild domain:\n\n- [measuring customers](customers/measuring): how to compute customer behavior figures from orders."
+    },
+    {
+      "path": "customers/measuring",
+      "display_name": "Measuring customers",
+      "description": "How to compute customer behavior figures (frequency, spend, recency) from orders.",
+      "context_md": "How to turn orders into per-customer figures. None of these are stored; derive them by grouping `ORDERS` by `CUSTOMER_ID`.\n\n- Visit frequency: count a customer's orders over a time window.\n- Customer spend: sum a customer's pre-tax `SUBTOTAL` over a window.\n- Recency: a customer's most recent `ORDERED_AT`.\n- First visit: a customer's earliest `ORDERED_AT`.\n\nA customer's home store is not stored either; if needed, take the store where they have placed the most orders. For store-level customer questions, group the same derivations by `STORE_ID` as well."
+    },
+    {
+      "path": "stores",
+      "display_name": "Stores",
+      "description": "The six Jaffle Shop locations.",
+      "context_md": "Six locations, named by city. Store-level cuts of any sales or customer figure go through `ORDERS.STORE_ID`. Stores opened on different dates (`OPENED_AT`), so year-over-year comparisons across stores are only fair for stores open the whole period. Sales tax rate is per store, which is why the same subtotal yields different `ORDER_TOTAL` at different stores."
+    }
+  ],
+  "tables": [
+    {
+      "schema_name": "JAFFLE",
+      "table_name": "ORDERS",
+      "domain_path": "sales",
+      "description": "One row per order: a register transaction at one store by one customer.",
+      "synonyms": [
+        "order",
+        "sale",
+        "transaction",
+        "purchase",
+        "ticket"
+      ],
+      "grain": [
+        "ORDER_ID"
+      ],
+      "sql": null,
+      "lineage_description": null,
+      "source_tables": [],
+      "source_sql": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 61948,
+      "columns": [
+        {
+          "name": "ORDER_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 1,
+          "description": "Unique order identifier.",
+          "unit": null,
+          "synonyms": [
+            "order id"
+          ],
+          "source": "introspected"
+        },
+        {
+          "name": "CUSTOMER_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 2,
+          "description": "Customer who placed the order.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "STORE_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 3,
+          "description": "Store the order was placed at.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "ORDERED_AT",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "ordinal": 4,
+          "description": "When the order was placed.",
+          "unit": null,
+          "synonyms": [
+            "order date",
+            "order time",
+            "date"
+          ],
+          "source": "introspected"
+        },
+        {
+          "name": "SUBTOTAL",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "ordinal": 5,
+          "description": "Order value before sales tax, in USD. The basis for revenue and order-value figures.",
+          "unit": null,
+          "synonyms": [
+            "pre-tax amount",
+            "net amount"
+          ],
+          "source": "introspected"
+        },
+        {
+          "name": "TAX_PAID",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "ordinal": 6,
+          "description": "Sales tax on the order, in USD. The rate varies by store.",
+          "unit": null,
+          "synonyms": [
+            "tax",
+            "sales tax"
+          ],
+          "source": "introspected"
+        },
+        {
+          "name": "ORDER_TOTAL",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "ordinal": 7,
+          "description": "Amount the customer actually paid: subtotal plus sales tax, in USD.",
+          "unit": null,
+          "synonyms": [
+            "total",
+            "amount paid",
+            "gross amount"
+          ],
+          "source": "introspected"
+        }
+      ]
+    },
+    {
+      "schema_name": "JAFFLE",
+      "table_name": "ORDER_ITEMS",
+      "domain_path": "sales",
+      "description": "One row per item inside an order.",
+      "synonyms": [
+        "order item",
+        "line item",
+        "item"
+      ],
+      "grain": [
+        "ORDER_ITEM_ID"
+      ],
+      "sql": null,
+      "lineage_description": null,
+      "source_tables": [],
+      "source_sql": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 90900,
+      "columns": [
+        {
+          "name": "ORDER_ITEM_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 1,
+          "description": "Unique order item identifier.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "ORDER_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 2,
+          "description": "Order this item belongs to.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "SKU",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 3,
+          "description": "Menu product this item is. Join to PRODUCTS for name, type, and price.",
+          "unit": null,
+          "synonyms": [
+            "product code"
+          ],
+          "source": "introspected"
+        }
+      ]
+    },
+    {
+      "schema_name": "JAFFLE",
+      "table_name": "PRODUCTS",
+      "domain_path": "sales/menu",
+      "description": "One row per menu product (jaffles and beverages).",
+      "synonyms": [
+        "product",
+        "menu item",
+        "item",
+        "dish"
+      ],
+      "grain": [
+        "SKU"
+      ],
+      "sql": null,
+      "lineage_description": null,
+      "source_tables": [],
+      "source_sql": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 10,
+      "columns": [
+        {
+          "name": "SKU",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 1,
+          "description": "Unique product code. JAF-prefixed are jaffles, BEV-prefixed are beverages.",
+          "unit": null,
+          "synonyms": [
+            "product code"
+          ],
+          "source": "introspected"
+        },
+        {
+          "name": "PRODUCT_NAME",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 2,
+          "description": "Menu name of the product.",
+          "unit": null,
+          "synonyms": [
+            "name",
+            "menu name"
+          ],
+          "source": "introspected"
+        },
+        {
+          "name": "PRODUCT_TYPE",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 3,
+          "description": "'jaffle' (food) or 'beverage' (drink).",
+          "unit": null,
+          "synonyms": [
+            "category",
+            "type",
+            "food or drink"
+          ],
+          "source": "introspected"
+        },
+        {
+          "name": "PRICE",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "ordinal": 4,
+          "description": "Menu price in USD, before tax.",
+          "unit": null,
+          "synonyms": [
+            "menu price",
+            "list price"
+          ],
+          "source": "introspected"
+        },
+        {
+          "name": "DESCRIPTION",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 5,
+          "description": "Menu description of the product.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        }
+      ]
+    },
+    {
+      "schema_name": "JAFFLE",
+      "table_name": "SUPPLIES",
+      "domain_path": "sales/menu",
+      "description": "One row per supply used to make a product. Several supplies per product.",
+      "synonyms": [
+        "supply",
+        "ingredient",
+        "supply cost",
+        "cogs"
+      ],
+      "grain": [
+        "SUPPLY_ID",
+        "SKU"
+      ],
+      "sql": null,
+      "lineage_description": null,
+      "source_tables": [],
+      "source_sql": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 65,
+      "columns": [
+        {
+          "name": "SUPPLY_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 1,
+          "description": "Supply identifier. The same supply can appear under several products.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "SUPPLY_NAME",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 2,
+          "description": "Name of the supply (ingredient or packaging).",
+          "unit": null,
+          "synonyms": [
+            "ingredient"
+          ],
+          "source": "introspected"
+        },
+        {
+          "name": "COST",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "ordinal": 3,
+          "description": "Cost of this supply per unit of product made, in USD. A product's unit cost is the SUM of its supply costs.",
+          "unit": null,
+          "synonyms": [
+            "unit cost",
+            "supply cost"
+          ],
+          "source": "introspected"
+        },
+        {
+          "name": "PERISHABLE",
+          "data_type": "BOOLEAN",
+          "nullable": true,
+          "ordinal": 4,
+          "description": "True if the supply is perishable.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        },
+        {
+          "name": "SKU",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 5,
+          "description": "Product this supply is used for.",
+          "unit": null,
+          "synonyms": [],
+          "source": "introspected"
+        }
+      ]
+    },
+    {
+      "schema_name": "JAFFLE",
+      "table_name": "CUSTOMERS",
+      "domain_path": "customers",
+      "description": "One row per known customer, identified across visits and stores.",
+      "synonyms": [
+        "customer",
+        "guest",
+        "patron",
+        "buyer"
+      ],
+      "grain": [
+        "CUSTOMER_ID"
+      ],
+      "sql": null,
+      "lineage_description": null,
+      "source_tables": [],
+      "source_sql": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 6910,
+      "columns": [
+        {
+          "name": "CUSTOMER_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 1,
+          "description": "Unique customer identifier.",
+          "unit": null,
+          "synonyms": [
+            "customer id"
+          ],
+          "source": "introspected"
+        },
+        {
+          "name": "CUSTOMER_NAME",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 2,
+          "description": "Customer's full name.",
+          "unit": null,
+          "synonyms": [
+            "name"
+          ],
+          "source": "introspected"
+        }
+      ]
+    },
+    {
+      "schema_name": "JAFFLE",
+      "table_name": "STORES",
+      "domain_path": "stores",
+      "description": "One row per Jaffle Shop location.",
+      "synonyms": [
+        "store",
+        "location",
+        "shop",
+        "cafe",
+        "site"
+      ],
+      "grain": [
+        "STORE_ID"
+      ],
+      "sql": null,
+      "lineage_description": null,
+      "source_tables": [],
+      "source_sql": null,
+      "is_virtual": false,
+      "table_type": null,
+      "approximate_row_count": 6,
+      "columns": [
+        {
+          "name": "STORE_ID",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 1,
+          "description": "Unique store identifier.",
+          "unit": null,
+          "synonyms": [
+            "store id"
+          ],
+          "source": "introspected"
+        },
+        {
+          "name": "STORE_NAME",
+          "data_type": "TEXT",
+          "nullable": true,
+          "ordinal": 2,
+          "description": "City the store is in; used as the store's name.",
+          "unit": null,
+          "synonyms": [
+            "city",
+            "location name"
+          ],
+          "source": "introspected"
+        },
+        {
+          "name": "OPENED_AT",
+          "data_type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "ordinal": 3,
+          "description": "Date the store opened.",
+          "unit": null,
+          "synonyms": [
+            "opening date"
+          ],
+          "source": "introspected"
+        },
+        {
+          "name": "TAX_RATE",
+          "data_type": "NUMBER",
+          "nullable": true,
+          "ordinal": 4,
+          "description": "Sales tax rate applied at this store (for example 0.06 = 6%).",
+          "unit": null,
+          "synonyms": [
+            "sales tax rate"
+          ],
+          "source": "introspected"
+        }
+      ]
+    }
+  ],
+  "joins": [
+    {
+      "from_schema": "JAFFLE",
+      "from_table": "ORDERS",
+      "to_schema": "JAFFLE",
+      "to_table": "CUSTOMERS",
+      "condition_sql": "JAFFLE.ORDERS.CUSTOMER_ID = JAFFLE.CUSTOMERS.CUSTOMER_ID",
+      "column_pairs": [],
+      "source": "manual",
+      "cardinality": "many_to_one",
+      "description": "Each order was placed by one customer."
+    },
+    {
+      "from_schema": "JAFFLE",
+      "from_table": "ORDERS",
+      "to_schema": "JAFFLE",
+      "to_table": "STORES",
+      "condition_sql": "JAFFLE.ORDERS.STORE_ID = JAFFLE.STORES.STORE_ID",
+      "column_pairs": [],
+      "source": "manual",
+      "cardinality": "many_to_one",
+      "description": "Each order was placed at one store."
+    },
+    {
+      "from_schema": "JAFFLE",
+      "from_table": "ORDER_ITEMS",
+      "to_schema": "JAFFLE",
+      "to_table": "ORDERS",
+      "condition_sql": "JAFFLE.ORDER_ITEMS.ORDER_ID = JAFFLE.ORDERS.ORDER_ID",
+      "column_pairs": [],
+      "source": "manual",
+      "cardinality": "many_to_one",
+      "description": "Each order item belongs to one order."
+    },
+    {
+      "from_schema": "JAFFLE",
+      "from_table": "ORDER_ITEMS",
+      "to_schema": "JAFFLE",
+      "to_table": "PRODUCTS",
+      "condition_sql": "JAFFLE.ORDER_ITEMS.SKU = JAFFLE.PRODUCTS.SKU",
+      "column_pairs": [],
+      "source": "manual",
+      "cardinality": "many_to_one",
+      "description": "Each order item is one menu product."
+    },
+    {
+      "from_schema": "JAFFLE",
+      "from_table": "SUPPLIES",
+      "to_schema": "JAFFLE",
+      "to_table": "PRODUCTS",
+      "condition_sql": "JAFFLE.SUPPLIES.SKU = JAFFLE.PRODUCTS.SKU",
+      "column_pairs": [],
+      "source": "manual",
+      "cardinality": "many_to_one",
+      "description": "Each supply row is used for one product; a product has several supply rows."
+    }
+  ],
+  "metrics": [
+    {
+      "name": "revenue",
+      "display_name": "Revenue",
+      "expression": "SUM(\"SUBTOTAL\")",
+      "domain_path": "sales",
+      "description": "Total order value before sales tax, in USD. The company's headline revenue figure.",
+      "table_schema": "JAFFLE",
+      "table_name": "ORDERS",
+      "filters": null,
+      "unit": "USD",
+      "synonyms": [
+        "sales",
+        "turnover",
+        "net sales"
+      ],
+      "notes": null,
+      "precomputed_in": null
+    },
+    {
+      "name": "order_count",
+      "display_name": "Orders",
+      "expression": "COUNT(*)",
+      "domain_path": "sales",
+      "description": "Number of orders.",
+      "table_schema": "JAFFLE",
+      "table_name": "ORDERS",
+      "filters": null,
+      "unit": "count",
+      "synonyms": [
+        "number of orders",
+        "order volume",
+        "tickets"
+      ],
+      "notes": null,
+      "precomputed_in": null
+    },
+    {
+      "name": "average_order_value",
+      "display_name": "Average order value",
+      "expression": "AVG(\"SUBTOTAL\")",
+      "domain_path": "sales",
+      "description": "Average pre-tax value of an order, in USD.",
+      "table_schema": "JAFFLE",
+      "table_name": "ORDERS",
+      "filters": null,
+      "unit": "USD",
+      "synonyms": [
+        "AOV",
+        "average basket",
+        "average ticket"
+      ],
+      "notes": null,
+      "precomputed_in": null
+    }
+  ]
+}
