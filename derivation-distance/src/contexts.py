@@ -1,9 +1,10 @@
 """Pre-rendered context cache.
 
 The body of a context (everything except the leading question line) is identical
-across all questions in a dataset for `ladder.SHARED_BODY_LEVELS` (L0, L1..L4,
-L5_example_library). We store that body once per (dataset, level). Per-question levels
-(L6_single_template, L5_single_example) are stored per (dataset, level, id).
+across all questions in a dataset for `ladder.SHARED_BODY_LEVELS` (bare_schema,
+descriptions, metrics, examples, templates). We store that body once per
+(dataset, level). Per-question levels (the *_heldout and 3-example arms) are
+stored per (dataset, level, id).
 
 `get(ds, qrow, level)` composes the question block with the cached body and is
 byte-for-byte equal to `ladder.render(ds, qrow, level)`. The benchmark uses

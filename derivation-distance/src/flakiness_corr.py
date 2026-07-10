@@ -6,7 +6,7 @@ true success prob p, P(flaky) = 1 - p^3 - (1-p)^3 = 3p(1-p), an inverted-U that
 is 0 at p=0 or 1 and peaks at p=0.5. So the honest question is whether model /
 level / dataset correlate with flakiness ON TOP of where they put accuracy.
 
-Reads results/runs/full_ladder.jsonl (N=3, all 7 levels, 3 datasets).
+Reads results/runs/main.jsonl (N=3, the article grid, 3 datasets).
 """
 import json
 import os
@@ -32,7 +32,7 @@ for ds in config.DATASETS:
 def load_cells():
     correct = defaultdict(int)
     n = defaultdict(int)
-    for line in open(os.path.join(config.BASE, "results", "runs", (__import__("sys").argv[1] if len(__import__("sys").argv)>1 else "full_ladder.jsonl"))):
+    for line in open(os.path.join(config.BASE, "results", "runs", (__import__("sys").argv[1] if len(__import__("sys").argv)>1 else "main.jsonl"))):
         r = json.loads(line)
         k = (r["model"], r["level"], r["id"])
         correct[k] += 1 if r.get("correct") else 0

@@ -201,7 +201,7 @@ if __name__ == "__main__":
             if qrow is None:
                 print("no non-gap question available; skipping live run_cell")
             else:
-                rec = run_cell("haiku", ds, qrow, "L4_metric_formulas", 0)
+                rec = run_cell("haiku", ds, qrow, "metrics", 0)
                 keys = list(rec.keys())
                 print("run_cell returned keys:", keys)
                 print("sample record:", {k: rec[k] for k in

@@ -1,7 +1,7 @@
 """Generate article-specific charts with filtered levels and reader-friendly labels.
 
 Reads the same data as analyze.py / repeatability.py / cost.py but shows only
-the four levels kept in the article: L0, L1, L4, L5. Labels are descriptive
+the four levels kept in the article. Labels are descriptive
 instead of internal codes.
 
 Usage:
@@ -23,15 +23,15 @@ sys.path.insert(0, os.path.dirname(__file__))
 import config
 import questions
 
-ARTICLE_LEVELS = ["L0_bare_schema", "L1_schema_descriptions", "L4_metric_formulas", "L5_example_library"]
-ARTICLE_DERIV = ["L1_schema_descriptions", "L4_metric_formulas", "L5_example_library"]
-ARTICLE_SIDE = ["L0_bare_schema"]
+ARTICLE_LEVELS = ["bare_schema", "descriptions", "metrics", "examples"]
+ARTICLE_DERIV = ["descriptions", "metrics", "examples"]
+ARTICLE_SIDE = ["bare_schema"]
 
 LABEL = {
-    "L0_bare_schema": "bare schema",
-    "L1_schema_descriptions": "descriptions",
-    "L4_metric_formulas": "metrics",
-    "L5_example_library": "examples",
+    "bare_schema": "bare schema",
+    "descriptions": "descriptions",
+    "metrics": "metrics",
+    "examples": "examples",
 }
 
 MODELS = ["haiku", "sonnet", "opus"]
@@ -81,7 +81,7 @@ def fig_accuracy_vs_level(recs, tier, outname):
     fig, ax = plt.subplots(figsize=(8.5, 5))
 
     xmap = {lv: i for i, lv in enumerate(ARTICLE_DERIV)}
-    side_x = {"L0_bare_schema": -1}
+    side_x = {"bare_schema": -1}
 
     tick_pos = [-1] + list(range(len(ARTICLE_DERIV)))
     tick_lab = [LABEL[s] for s in ARTICLE_SIDE] + [LABEL[lv] for lv in ARTICLE_DERIV]
@@ -96,10 +96,10 @@ def fig_accuracy_vs_level(recs, tier, outname):
 
     arm_label_done = False
     for model in MODELS:
-        if (model, "L0_bare_schema") in acc:
+        if (model, "bare_schema") in acc:
             label = "bare schema (incomplete)" if not arm_label_done else None
             arm_label_done = True
-            ax.scatter([-1], [acc[(model, "L0_bare_schema")]],
+            ax.scatter([-1], [acc[(model, "bare_schema")]],
                        marker="*", s=170, color=MODEL_COLOR[model],
                        edgecolors="black", linewidths=0.6, zorder=5, label=label)
 
@@ -195,7 +195,7 @@ def fig_cost_accuracy(recs, tier, outname):
 # -- Chart 07: leave-one-out example library (hard tier) ----------------------
 # A library written for the question (all-inclusive) vs one written for OTHER
 # questions (leave-one-out), both against the metrics baseline. Templates (the
-# old L6 bars) are dropped: that rung is no longer carried anywhere else in the
+# old template bars) are dropped: that rung is no longer carried anywhere else in the
 # article, so it does not belong on this chart.
 
 def _hard_acc_by_model(recs, level):
@@ -210,9 +210,9 @@ def _hard_acc_by_model(recs, level):
 def fig_leave_one_out(outname):
     fr = load(ABLATION_BASE_FILE)
     loo = load(LOO_FILE)
-    metrics = _hard_acc_by_model(fr, "L4_metric_formulas")   # baseline, no library
-    allinc = _hard_acc_by_model(fr, "L5_example_library")        # library incl. this question
-    held = _hard_acc_by_model(loo, "L5_library_heldout")             # library of OTHER questions
+    metrics = _hard_acc_by_model(fr, "metrics")   # baseline, no library
+    allinc = _hard_acc_by_model(fr, "examples")        # library incl. this question
+    held = _hard_acc_by_model(loo, "examples_heldout")             # library of OTHER questions
 
     C_ALL = "#1f77b4"   # example library, all-inclusive
     C_LOO = "#ff7f0e"   # example library, leave-one-out
@@ -260,10 +260,10 @@ def fig_leave_one_out(outname):
 def fig_relevance(outname):
     fr = load(ABLATION_BASE_FILE)
     rel = load(REL_FILE)
-    library = _hard_acc_by_model(fr, "L5_example_library")
-    metrics = _hard_acc_by_model(fr, "L4_metric_formulas")
-    irr3 = _hard_acc_by_model(rel, "L5_irrelevant_3")
-    rel3 = _hard_acc_by_model(rel, "L5_relevant_3")
+    library = _hard_acc_by_model(fr, "examples")
+    metrics = _hard_acc_by_model(fr, "metrics")
+    irr3 = _hard_acc_by_model(rel, "irrelevant_3")
+    rel3 = _hard_acc_by_model(rel, "relevant_3")
 
     C_IRR = "#b0b0b0"   # 3 irrelevant examples
     C_REL = "#ff7f0e"   # 3 relevant examples

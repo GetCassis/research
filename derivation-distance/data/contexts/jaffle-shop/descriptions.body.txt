@@ -1,0 +1,51 @@
+# Operating context
+
+- The data is a static snapshot; treat the current date ('today') as 2026-06-17 for any relative time window.
+- Relative time windows ('last N days') are lower-bounded only: include everything from today minus N days onward, and do not add an upper bound at today.
+
+# Schema
+
+## ORDERS — One row per order: a register transaction at one store by one customer.
+- ORDER_ID (VARCHAR): Unique order identifier.
+- CUSTOMER_ID (VARCHAR): Customer who placed the order.
+- STORE_ID (VARCHAR): Store the order was placed at.
+- ORDERED_AT (TIMESTAMP): When the order was placed.
+- SUBTOTAL (DOUBLE): Order value before sales tax, in USD. The basis for revenue and order-value figures.
+- TAX_PAID (DOUBLE): Sales tax on the order, in USD. The rate varies by store.
+- ORDER_TOTAL (DOUBLE): Amount the customer actually paid: subtotal plus sales tax, in USD.
+
+## ORDER_ITEMS — One row per item inside an order.
+- ORDER_ITEM_ID (VARCHAR): Unique order item identifier.
+- ORDER_ID (VARCHAR): Order this item belongs to.
+- SKU (VARCHAR): Menu product this item is. Join to PRODUCTS for name, type, and price.
+
+## PRODUCTS — One row per menu product (jaffles and beverages).
+- SKU (VARCHAR): Unique product code. JAF-prefixed are jaffles, BEV-prefixed are beverages.
+- PRODUCT_NAME (VARCHAR): Menu name of the product.
+- PRODUCT_TYPE (VARCHAR): 'jaffle' (food) or 'beverage' (drink).
+- PRICE (DOUBLE): Menu price in USD, before tax.
+- DESCRIPTION (VARCHAR): Menu description of the product.
+
+## SUPPLIES — One row per supply used to make a product. Several supplies per product.
+- SUPPLY_ID (VARCHAR): Supply identifier. The same supply can appear under several products.
+- SUPPLY_NAME (VARCHAR): Name of the supply (ingredient or packaging).
+- COST (DOUBLE): Cost of this supply per unit of product made, in USD. A product's unit cost is the SUM of its supply costs.
+- PERISHABLE (BOOLEAN): True if the supply is perishable.
+- SKU (VARCHAR): Product this supply is used for.
+
+## CUSTOMERS — One row per known customer, identified across visits and stores.
+- CUSTOMER_ID (VARCHAR): Unique customer identifier.
+- CUSTOMER_NAME (VARCHAR): Customer's full name.
+
+## STORES — One row per Jaffle Shop location.
+- STORE_ID (VARCHAR): Unique store identifier.
+- STORE_NAME (VARCHAR): City the store is in; used as the store's name.
+- OPENED_AT (TIMESTAMP): Date the store opened.
+- TAX_RATE (DOUBLE): Sales tax rate applied at this store (for example 0.06 = 6%).
+
+## Joins
+- JAFFLE.ORDERS.CUSTOMER_ID = JAFFLE.CUSTOMERS.CUSTOMER_ID  (Each order was placed by one customer.)
+- JAFFLE.ORDERS.STORE_ID = JAFFLE.STORES.STORE_ID  (Each order was placed at one store.)
+- JAFFLE.ORDER_ITEMS.ORDER_ID = JAFFLE.ORDERS.ORDER_ID  (Each order item belongs to one order.)
+- JAFFLE.ORDER_ITEMS.SKU = JAFFLE.PRODUCTS.SKU  (Each order item is one menu product.)
+- JAFFLE.SUPPLIES.SKU = JAFFLE.PRODUCTS.SKU  (Each supply row is used for one product; a product has several supply rows.)

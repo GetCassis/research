@@ -1,22 +1,25 @@
 """Derivation-distance ladder context renderer. See docs/CONTRACT.md + README.
 
-The DERIVATION axis holds COMPLETENESS constant: every rung (L1+) shows the
-published ontology at increasing depth, plus the global dataset facts. The context
-is IDENTICAL across questions at every level (discoverability is part of the task);
+The DERIVATION axis holds COMPLETENESS constant: every rung shows the published
+ontology at increasing depth, plus the global dataset facts. The context is
+IDENTICAL across questions at every level (discoverability is part of the task);
 rungs differ only in how spelled-out the *implementation* is, so accuracy
 differences along the axis are derivation distance, not missing information:
 
-  L1 schema_descriptions  schema + column descriptions + global operating facts — max distance
-  L2 prose_rules          + domain context_md prose (rules, guardrails)
-  L3 named_metrics        + named metric (entity + description, NO expression)
-  L4 metric_formulas      + metric expression + filters + table   (the full published ontology)
-  L5 example_library      + the FULL worked-example library (model finds the relevant analogue)
-  L6 answer_templates     + the FULL template gallery: every question's gold SQL, one literal
-                            blanked to <???> (model finds its own and fills the blank)
+  descriptions   schema + column descriptions + global operating facts — max distance
+  metrics        + domain prose, named metrics, and metric expressions
+                   (= the full published ontology)
+  examples       + the FULL worked-example library (model finds the relevant analogue)
 
-  L0 bare_schema    SIDE ARM (not on the axis): column NAMES only, NO facts.
-                    Deliberately incomplete for most questions — measures whether a
-                    model can recover the conventions from names alone.
+  bare_schema    SIDE ARM (not on the axis): column NAMES only, NO facts.
+                 Deliberately incomplete for most questions — measures whether a
+                 model can recover the conventions from names alone.
+
+  templates      COMPARISON ARM: metrics + the FULL template gallery (every
+                 question's gold SQL, one literal blanked to <???>; the model finds
+                 its own and fills the blank). Off the axis because it presumes the
+                 answers were written down ahead of time. The other comparison arms
+                 (*_heldout, relevant_3*, irrelevant_3) are library ablations.
 
 Only facts present in THIS dataset's ontology (plus the authored required facts)
 are emitted; nothing is invented.
@@ -31,7 +34,7 @@ import config
 
 # Inclusion flags are keyed off the level's position within DERIVATION_LEVELS.
 _DRANK = {name: i for i, name in enumerate(config.DERIVATION_LEVELS)}
-# also accept short codes ("L3")
+# also accept the first name component as a short code
 for _name, _i in list(_DRANK.items()):
     _DRANK[_name.split("_", 1)[0]] = _i
 
@@ -60,7 +63,7 @@ def _facts_section(ds, qrow):
     """GLOBAL dataset facts only (e.g. the snapshot date) — IDENTICAL across all
     questions. We deliberately do NOT inject the question's `required_facts`: those
     are the completeness rubric, not context. Discoverability of the relevant
-    conventions is part of the task. Injected at every derivation rung (L1+)."""
+    conventions is part of the task. Injected at every derivation rung (descriptions and above)."""
     facts = list(config.DATASET_FACTS.get(ds, []))
     if not facts:
         return None
@@ -156,17 +159,6 @@ def _metric_impl_section(ontology):
     return lines
 
 
-def _worked_example_section(qrow):
-    es = qrow.get("example_sql")
-    if not es:
-        return None
-    lines = ["# Worked example (analogous question)", ""]
-    if qrow.get("example_question"):
-        lines += [f"Question: {qrow['example_question']}", ""]
-    lines += ["```sql", es.strip(), "```", ""]
-    return lines
-
-
 def _examples_from(chosen):
     """Render a worked-example library from an explicit list of question dicts."""
     lines = ["# Worked examples (library)", ""]
@@ -238,29 +230,12 @@ def _template_library_section(ds, exclude_id=None):
     return lines if n else None
 
 
-def _template_section(qrow):
-    gold = qrow.get("gold_sql")
-    if not gold:
-        return None
-    return [
-        "# Answer template (gold query, one literal blanked)",
-        "",
-        "Fill in the `<???>` value:",
-        "",
-        "```sql",
-        _blank_one_literal(gold.strip()),
-        "```",
-        "",
-    ]
-
-
 # ---- public API ------------------------------------------------------------
 
 
 # Every level's BODY (everything except the question line) is now identical across
 # all questions in a dataset, so each is pre-rendered once per (dataset, level).
-SHARED_BODY_LEVELS = ["L0_bare_schema", "L1_schema_descriptions", "L2_prose_rules",
-                      "L3_named_metrics", "L4_metric_formulas", "L5_example_library", "L6_answer_templates"]
+SHARED_BODY_LEVELS = ["bare_schema", "descriptions", "metrics", "examples", "templates"]
 
 
 def _body_sections(ds, qrow, level):
@@ -270,44 +245,45 @@ def _body_sections(ds, qrow, level):
     parts = []
 
     if _is_side(level):
-        # L0 bare schema: names only, NO facts. Deliberately incomplete.
+        # bare schema: names only, NO facts. Deliberately incomplete.
         parts.append(_schema_section(ds, ontology, include_descriptions=False))
         return parts
 
-    if level in ("L5_example_library", "L6_answer_templates", "L5_library_heldout", "L6_templates_heldout",
-                 "L5_relevant_3", "L5_irrelevant_3", "L5_relevant_3_question", "L5_relevant_3_goldsql"):
-        # Full ontology (= L4) + a library the model must search. *_loo = leave-one-out
-        # (this question's own entry held out). L5_relevant_3 / L5_irrelevant_3 = a 3-example library
-        # of the most / least relevant OTHER examples (relevance ablation);
-        # L5_relevant_3_question / L5_relevant_3_goldsql = same but selected by question-text similarity
-        # (realistic retriever) / gold-SQL token overlap (retrieval upper bound).
+    if level in ("examples", "templates", "examples_heldout", "templates_heldout",
+                 "relevant_3", "irrelevant_3", "relevant_3_question", "relevant_3_goldsql"):
+        # Full ontology (= the metrics level) + a library the model must search.
+        # *_heldout = leave-one-out (this question's own entry held out).
+        # relevant_3 / irrelevant_3 = a 3-example library of the most / least relevant
+        # OTHER examples (relevance ablation); relevant_3_question / relevant_3_goldsql
+        # = same but selected by question-text similarity (realistic retriever) /
+        # gold-SQL token overlap (retrieval upper bound).
         parts.append(_facts_section(ds, qrow))
         parts.append(_schema_section(ds, ontology, include_descriptions=True))
         parts.append(_prose_section(ontology))
         parts.append(_metric_named_section(ontology))
         parts.append(_metric_impl_section(ontology))
-        if level in ("L5_relevant_3", "L5_irrelevant_3", "L5_relevant_3_question", "L5_relevant_3_goldsql"):
+        if level in ("relevant_3", "irrelevant_3", "relevant_3_question", "relevant_3_goldsql"):
             import relevance
-            which = {"L5_relevant_3": "rel", "L5_irrelevant_3": "irr",
-                     "L5_relevant_3_question": "relq", "L5_relevant_3_goldsql": "relg"}[level]
+            which = {"relevant_3": "rel", "irrelevant_3": "irr",
+                     "relevant_3_question": "relq", "relevant_3_goldsql": "relg"}[level]
             chosen = relevance.select_examples(ds, qrow["id"], which, k=3)
             parts.append(_examples_from(chosen))
-        elif level in ("L5_example_library", "L5_library_heldout"):
-            parts.append(_example_library_section(ds, exclude_id=qrow["id"] if level == "L5_library_heldout" else None))
+        elif level in ("examples", "examples_heldout"):
+            parts.append(_example_library_section(ds, exclude_id=qrow["id"] if level == "examples_heldout" else None))
         else:
-            parts.append(_template_library_section(ds, exclude_id=qrow["id"] if level == "L6_templates_heldout" else None))
+            parts.append(_template_library_section(ds, exclude_id=qrow["id"] if level == "templates_heldout" else None))
         return [p for p in parts if p]
 
-    r = _drank(level)  # L1..L4 only (L5/L6 libraries are handled above)
+    r = _drank(level)  # descriptions / metrics only (libraries are handled above)
     # Global operating facts (e.g. snapshot date) — identical across questions.
     parts.append(_facts_section(ds, qrow))
-    # Schema with descriptions at every derivation rung (L1+); L0 had names only.
+    # Schema with descriptions at every derivation rung; bare_schema had names only.
     parts.append(_schema_section(ds, ontology, include_descriptions=True))
     if r >= 1:
+        # metrics = the full published ontology: domain prose, named metrics,
+        # and the metric implementations (expression + filters + table).
         parts.append(_prose_section(ontology))
-    if r >= 2:
         parts.append(_metric_named_section(ontology))
-    if r >= 3:
         parts.append(_metric_impl_section(ontology))
     return [p for p in parts if p]
 
@@ -383,55 +359,53 @@ if __name__ == "__main__":
         print(f"{level:20s} tokens={counts[level]:5d}")
     print()
 
-    # Monotone across the ontology-depth prefix L1..L4 (L5_example_library is a large
-    # library and L6/comparison are smaller, so the full axis is not monotone).
-    depth = ["L1_schema_descriptions", "L2_prose_rules", "L3_named_metrics", "L4_metric_formulas"]
-    nums = [counts[l] for l in depth]
-    for i in range(1, len(nums)):
-        assert nums[i] >= nums[i - 1], f"token count dropped at {depth[i]}"
-    assert counts["L5_example_library"] > counts["L4_metric_formulas"], "L5_example_library should add the example library"
-    assert counts["L6_answer_templates"] > counts["L4_metric_formulas"], "L6_answer_templates should add the template library"
-    print("OK: token counts non-decreasing L1->L4; L5/L6 libraries add their galleries")
+    # Monotone across the depth prefix descriptions -> metrics (examples is a
+    # large library and the comparison arms are smaller, so the full set is not
+    # monotone).
+    assert counts["metrics"] >= counts["descriptions"], "token count dropped at metrics"
+    assert counts["examples"] > counts["metrics"], "examples should add the example library"
+    assert counts["templates"] > counts["metrics"], "templates should add the template library"
+    print("OK: token counts non-decreasing descriptions->metrics; libraries add their galleries")
 
     onto = _load_ontology(ds)
-    # Context is the GLOBAL ontology, identical across questions through L4. L1
+    # Context is the GLOBAL ontology, identical across questions. descriptions
     # carries column descriptions + the global operating facts (snapshot date).
-    d0 = render(ds, qrow, "L1_schema_descriptions")
-    assert "# Operating context" in d0, "L1 must carry the global operating facts"
-    assert "2026-06-17" in d0, "L1 must carry the global snapshot date"
+    desc = render(ds, qrow, "descriptions")
+    assert "# Operating context" in desc, "descriptions must carry the global operating facts"
+    assert "2026-06-17" in desc, "descriptions must carry the global snapshot date"
     # Context must NOT contain the per-question required_facts (those are the rubric).
     for f in qrow.get("required_facts", []):
-        assert f not in d0, f"L1 leaked a per-question required fact: {f!r}"
-    # L3 names the metric but must NOT leak the expression; L4 includes it.
-    d2 = render(ds, qrow, "L3_named_metrics")
+        assert f not in desc, f"descriptions leaked a per-question required fact: {f!r}"
+    # descriptions must NOT leak the metric expressions; metrics includes them.
     for m in onto.get("metrics", []):
-        assert m["expression"] not in d2, f"L3 leaked expression {m['expression']!r}"
-    assert "Metric implementations" not in d2
-    d3 = render(ds, qrow, "L4_metric_formulas")
+        assert m["expression"] not in desc, f"descriptions leaked expression {m['expression']!r}"
+    assert "Metric implementations" not in desc
+    met = render(ds, qrow, "metrics")
     rev = next(m["expression"] for m in onto["metrics"] if m["name"] == "revenue")
-    assert rev in d3, "L4 must include the revenue expression"
-    print("OK: L1 carries global facts, NOT per-question facts; L3 hides expr; L4 reveals it")
+    assert rev in met, "metrics must include the revenue expression"
+    print("OK: descriptions carries global facts, NOT per-question facts, and hides "
+          "metric expressions; metrics reveals them")
 
-    # Two different questions must share identical context at L4 (discoverability task).
+    # Two different questions must share identical context at metrics (discoverability task).
     qs2 = [q for q in questions.load("jaffle-shop") if q["id"] != qrow["id"]]
     if qs2:
-        other = render(ds, qs2[0], "L4_metric_formulas")
-        a = "\n".join(l for l in d3.splitlines() if not l.startswith("# Question") and l.strip() != qrow["question"])
+        other = render(ds, qs2[0], "metrics")
+        a = "\n".join(l for l in met.splitlines() if not l.startswith("# Question") and l.strip() != qrow["question"])
         b = "\n".join(l for l in other.splitlines() if not l.startswith("# Question") and l.strip() != qs2[0]["question"])
-        assert a == b, "L4 context must be identical across questions (only the question line differs)"
-        print("OK: L4 context identical across questions (only question text differs)")
+        assert a == b, "metrics context must be identical across questions (only the question line differs)"
+        print("OK: metrics context identical across questions (only question text differs)")
 
-    # L0 side arm: names only, NO facts/descriptions.
-    s0 = render(ds, qrow, "L0_bare_schema")
-    assert "# Operating context" not in s0, "L0 must NOT carry facts"
-    print("OK: L0 bare schema carries names only")
+    # bare_schema side arm: names only, NO facts/descriptions.
+    bare = render(ds, qrow, "bare_schema")
+    assert "# Operating context" not in bare, "bare_schema must NOT carry facts"
+    print("OK: bare_schema carries names only")
 
-    # L6_answer_templates: a shared gallery of blanked gold templates; the current question's
+    # templates: a shared gallery of blanked gold templates; the current question's
     # own template (and a <???> blank to fill) must be present.
-    d5 = render(ds, qrow, "L6_answer_templates")
-    assert "<???>" in d5, "L6_answer_templates templates must carry blanks to fill"
-    assert qrow["question"] in render_body(ds, qrow, "L6_answer_templates"), "L6_answer_templates must include this question's template"
-    other5 = render_body(ds, qs2[0], "L6_answer_templates") if qs2 else d5
+    tpl = render(ds, qrow, "templates")
+    assert "<???>" in tpl, "templates must carry blanks to fill"
+    assert qrow["question"] in render_body(ds, qrow, "templates"), "templates must include this question's template"
     if qs2:
-        assert render_body(ds, qrow, "L6_answer_templates") == other5, "L6_answer_templates body must be shared across questions"
-    print("OK: L6_answer_templates is a shared template gallery carrying every question's blanked gold")
+        assert render_body(ds, qrow, "templates") == render_body(ds, qs2[0], "templates"), \
+            "templates body must be shared across questions"
+    print("OK: templates is a shared gallery carrying every question's blanked gold")

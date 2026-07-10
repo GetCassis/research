@@ -8,12 +8,12 @@ constants. Every script has an `if __name__ == "__main__"` self-test path.
 ## `src/config.py`
 - `DATASETS = ["jaffle-shop", "thelook", "olist"]`
 - `MODELS = {label: model_id}` and `PRICING = {label: {"in": usd_per_mtok, "out": usd_per_mtok}}`
-- `DERIVATION_LEVELS = [L1_schema_descriptions, L2_prose_rules, L3_named_metrics, L4_metric_formulas, L5_example_library, L6_answer_templates]` — the axis
-- `SIDE_ARMS = [L0_bare_schema]`; `LEVELS = SIDE_ARMS + DERIVATION_LEVELS`
-- `COMPARISON_LEVELS = [L5_library_heldout, L6_templates_heldout, L5_relevant_3, L5_irrelevant_3, L5_relevant_3_question, L5_relevant_3_goldsql]` — ablation arms
-- `ANCHOR_LEVEL = L4_metric_formulas` (the full published ontology)
-- `DATASET_FACTS` — genuinely global facts injected identically at every L1+ rung
-  (snapshot date, the "last N days" window rule)
+- `DERIVATION_LEVELS = [descriptions, metrics, examples]` — the axis
+- `SIDE_ARMS = [bare_schema]`; `LEVELS = SIDE_ARMS + DERIVATION_LEVELS`
+- `COMPARISON_LEVELS = [templates, examples_heldout, templates_heldout, relevant_3, irrelevant_3, relevant_3_question, relevant_3_goldsql]` — ablation arms
+- `ANCHOR_LEVEL = metrics` (the full published ontology)
+- `DATASET_FACTS` — genuinely global facts injected identically at every derivation
+  rung (snapshot date, the "last N days" window rule)
 - path helpers: `dataset_dir`, `db_path`, `ontology_path`, `questions_path`, `gold_path`
 
 ## `src/db.py`
@@ -42,7 +42,8 @@ List of question dicts: `id`, `dataset`, `question`, `difficulty` (`single_agg` 
   at every level (libraries are shared galleries; leave-one-out and 3-example
   arms are per-question).
 - `available_levels(qrow)`; module self-test checks monotone token counts across
-  L1→L4, no rubric leakage, L3 hides metric expressions, shared bodies identical
+  descriptions→metrics, no rubric leakage, descriptions hides metric expressions
+  (metrics reveals them), shared bodies identical
   across questions.
 
 ## `src/contexts.py`

@@ -1,0 +1,466 @@
+# Operating context
+
+- The data is a static snapshot; treat the current date ('today') as 2026-05-30 for any relative time window.
+- Relative time windows ('last N days') are lower-bounded only: include everything from today minus N days onward, and do not add an upper bound at today.
+
+# Schema
+
+## CLOSED_DEALS — A won deal: a lead that signed up and became a seller. One row per closed deal (one per lead and one per seller). Carries the seller's declared profile at acquisition and the sales reps who handled it. Declared fields are self-reported and largely sparse: has_company, has_gtin and average_stock are about 92% null; declared_monthly_revenue is often 0 and has a single outlier around 8.5M EUR.
+- MQL_ID (VARCHAR): Lead this deal converted from.
+- SELLER_ID (VARCHAR): Seller created when the deal closed. Bridge to the marketplace (partial: about 380 of 842 appear in the marketplace tables).
+- SDR_ID (VARCHAR): Sales development representative who qualified the lead.
+- SR_ID (VARCHAR): Sales representative who closed the deal.
+- WON_DATE (TIMESTAMP): Date the deal closed. Treat as a date; a few rows carry a synthetic 02:00/03:00 time that is Brazil midnight stored as UTC, not a real time of day.
+- BUSINESS_SEGMENT (VARCHAR): Lead's industry vertical (e.g. home_appliances, watches, construction_tools). Reported on contact and used for sales-team segmentation. Distinct from LEAD_TYPE (sales-stage classification) and BUSINESS_TYPE (reseller vs manufacturer).
+- LEAD_TYPE (VARCHAR): Sales-stage classification assigned by the SDR, reflecting the lead's maturity and online footprint. Values: online_medium, online_big, industry, offline, online_small, online_beginner, online_top, other. Distinct from BUSINESS_TYPE (reseller vs manufacturer) and BUSINESS_SEGMENT (industry vertical).
+- LEAD_BEHAVIOUR_PROFILE (VARCHAR): DISC-style behavioral profile assigned by the SDR. Values: cat, eagle, wolf, shark (shark tends to carry the highest deal size). Can be multi-valued, e.g. 'cat,wolf'; about 21% null. Match with LIKE or split when filtering on a single profile.
+- HAS_COMPANY (BOOLEAN): Whether the lead has a registered company. Mostly null.
+- HAS_GTIN (BOOLEAN): Whether the lead has product barcodes (GTIN). Mostly null.
+- AVERAGE_STOCK (VARCHAR): Declared stock bracket. Values: 1-5, 5-20, 20-50, 50-200, 200+, unknown. Mostly null.
+- BUSINESS_TYPE (VARCHAR): Self-reported nature of the lead's business. Values: reseller, manufacturer, other. Distinct from LEAD_TYPE (SDR-assigned sales-stage classification) and BUSINESS_SEGMENT (industry vertical).
+- DECLARED_PRODUCT_CATALOG_SIZE (DOUBLE): Catalog size the lead declared at acquisition.
+- DECLARED_MONTHLY_REVENUE (DOUBLE): Monthly revenue the lead declared at acquisition. Self-reported, not actual sales.
+
+## CUSTOMERS — A buyer on the marketplace. One row per customer per order: the customer id is issued for a single order, while the customer unique id identifies the real person across their orders.
+
+Owner: analytics team. Questions: #data-asks-anything.
+- CUSTOMER_ID (VARCHAR): Per-order identifier of the customer. Unique per row; one is created for each order. Never count people with this column.
+- CUSTOMER_UNIQUE_ID (VARCHAR): Stable identifier of the real person across all their orders. Count distinct customers (people) with this column.
+- CUSTOMER_ZIP_CODE_PREFIX (VARCHAR): First digits of the customer's postal code, indicating their area. Join key to the geolocation lookup (dedup it first, see the marketplace domain notes).
+- CUSTOMER_CITY (VARCHAR): Customer's city.
+- CUSTOMER_STATE (VARCHAR): Customer's state (region), as a 2-letter code (for example SP, RJ, MG). SP is by far the most common. Common alternate names: São Paulo (SP), Rio de Janeiro (RJ), Minas Gerais (MG).
+
+## GEOLOCATION — Raw zip-prefix geolocation lookup: maps Brazilian zip code prefixes to latitude/longitude points. About 1M rows with MANY duplicate rows per prefix: never join this table directly, it fans out and inflates aggregates. Collapse it to one row per prefix first (GROUP BY zip prefix, AVG latitude and longitude in a subquery), then LEFT JOIN on the prefix from SELLERS or CUSTOMERS. Coordinates are area-level, not exact addresses. Its city/state values can disagree with the seller/customer tables; prefer the seller/customer columns for city and state.
+- GEOLOCATION_ZIP_CODE_PREFIX (VARCHAR): Zip code prefix. NOT unique: many rows per prefix; dedup before joining.
+- GEOLOCATION_LAT (DOUBLE): Latitude of one observed point in the zip prefix area. Average per prefix for a usable coordinate.
+- GEOLOCATION_LNG (DOUBLE): Longitude of one observed point in the zip prefix area. Average per prefix for a usable coordinate.
+- GEOLOCATION_CITY (VARCHAR): City label of the observed point. Can disagree with seller/customer city; prefer those columns.
+- GEOLOCATION_STATE (VARCHAR): State code of the observed point. Can disagree with seller/customer state; prefer those columns.
+
+## MARKETING_QUALIFIED_LEADS — A marketing qualified lead: a prospective seller who signed up and was qualified for sales follow-up. One row per lead. A lead may later convert into a closed deal.
+- MQL_ID (VARCHAR): Unique identifier of the marketing qualified lead.
+- FIRST_CONTACT_DATE (DATE): Date of first contact with the lead.
+- LANDING_PAGE_ID (VARCHAR): Landing page recorded on this lead row. One value per lead row (the lead may have visited other landing pages, but only one is stored here, typically the one tied to the qualification event). Do not infer multi-touch attribution from this field alone.
+- ORIGIN (VARCHAR): Acquisition channel. Values: organic_search, paid_search, social, affiliate, direct_traffic, email, referral, other, display, other_publicities.
+
+## ORDER_ITEMS — A single product sold by one seller within an order, i.e. one order line. One row per (order, order line number). This is the sale grain that carries business volume: price is the item sale amount and freight is shipping.
+
+Owner: data platform team. Questions: #data-asks-anything.
+- ORDER_ID (VARCHAR): Order this order item belongs to.
+- ORDER_ITEM_ID (BIGINT): Sequence number of the line within its order (1, 2, 3, ...).
+- PRODUCT_ID (VARCHAR): Product sold on this order item.
+- SELLER_ID (VARCHAR): Seller that sells and fulfills this order item.
+- SHIPPING_LIMIT_DATE (TIMESTAMP): Deadline by which the seller must hand the order item to the carrier.
+- PRICE (DOUBLE): Sale amount of this order item, excluding shipping. The basis of business volume (also called revenue, sales or GMV): sum it over delivered orders per the business_volume metric.
+- FREIGHT_VALUE (DOUBLE): Shipping amount charged on this order item. Excluded from business volume.
+
+## ORDER_PAYMENTS — A payment record against an order. One row per (order, payment sequence): an order can be settled in several records, for example a voucher plus a card. Installments capture deferred payment. To get the amount paid per order, sum payment value grouped by order.
+- ORDER_ID (VARCHAR): Order this payment settles.
+- PAYMENT_SEQUENTIAL (BIGINT): Sequence number of this payment record within the order.
+- PAYMENT_TYPE (VARCHAR): Method of payment. Values: credit_card, boleto, voucher, debit_card, not_defined. boleto is a prepaid bank payment slip; voucher is store credit. Credit card dominates (about three quarters of payment records), then boleto (about one fifth).
+- PAYMENT_INSTALLMENTS (BIGINT): Number of installments the payment is split into.
+- PAYMENT_VALUE (DOUBLE): Amount settled by this payment record.
+
+## ORDER_REVIEWS — A customer satisfaction review of an order, scored 1 to 5. Roughly one review per order, though a small number of orders carry more than one. Review id is not strictly unique (a few duplicates exist): never treat it as a key; dedup by order id when counting distinct reviews. Higher score means happier customer.
+- REVIEW_ID (VARCHAR): Identifier of the review. Not strictly unique: do NOT use as a join key or distinct-count key; dedup by ORDER_ID instead.
+- ORDER_ID (VARCHAR): Order this review is about. Use as the dedup key when counting distinct reviews.
+- REVIEW_SCORE (BIGINT): Satisfaction score from 1 (worst) to 5 (best). Scores skew positive: 5 is by far the largest bucket, with a secondary spike at 1.
+- REVIEW_COMMENT_TITLE (VARCHAR): Optional short title the customer gave the review, mostly in Portuguese.
+- REVIEW_COMMENT_MESSAGE (VARCHAR): Optional free-text body of the review, mostly in Portuguese. Merchant names in the text are anonymized.
+- REVIEW_CREATION_DATE (TIMESTAMP): When the review was submitted.
+- REVIEW_ANSWER_TIMESTAMP (TIMESTAMP): When the review was answered.
+
+## ORDERS — A purchase placed by a customer. One row per order. An order contains one or more order items. Status tracks the order through fulfillment; money lives on ORDER_ITEMS, not here. About 775 orders have no order item rows at all (mostly canceled or unavailable): LEFT JOIN from orders when item data might be absent.
+
+Owner: data platform team. Questions: #data-asks-anything.
+- ORDER_ID (VARCHAR): Unique identifier of the order.
+- CUSTOMER_ID (VARCHAR): Customer record that placed the order. Per-order id: use CUSTOMER_UNIQUE_ID on CUSTOMERS to identify the real person.
+- ORDER_STATUS (VARCHAR): Fulfillment status of the order. Values: delivered, shipped, canceled, unavailable, invoiced, processing, created, approved. About 97% of orders are delivered. Realized sales are status 'delivered'.
+- ORDER_PURCHASE_TIMESTAMP (TIMESTAMP): When the order was placed.
+- ORDER_APPROVED_AT (TIMESTAMP): When the order payment was approved.
+- ORDER_DELIVERED_CARRIER_DATE (TIMESTAMP): When the order was handed to the logistics carrier.
+- ORDER_DELIVERED_CUSTOMER_DATE (TIMESTAMP): When the order was delivered to the customer. Null if not yet delivered (and missing on 8 delivered orders; filter IS NOT NULL for delivery-time analysis). Delivery days = days from ORDER_PURCHASE_TIMESTAMP to this timestamp.
+- ORDER_ESTIMATED_DELIVERY_DATE (TIMESTAMP): Delivery date promised to the customer at purchase. An order is late when ORDER_DELIVERED_CUSTOMER_DATE is after this date, on time otherwise.
+
+## PRODUCT_CATEGORY_NAME_TRANSLATION — Lookup table mapping raw Portuguese product category labels to readable English labels. One row per category. LEFT JOIN from PRODUCTS and COALESCE the English name with the raw value; a few categories have no translation row.
+- PRODUCT_CATEGORY_NAME (VARCHAR): Raw category label in Portuguese. Join key from PRODUCTS.
+- PRODUCT_CATEGORY_NAME_ENGLISH (VARCHAR): Readable English category label (snake_case), e.g. health_beauty, bed_bath_table, furniture_decor.
+
+## PRODUCTS — An item listed in the marketplace catalog. One row per product. Category is stored in Portuguese; the English label comes from the category translation lookup. Physical attributes (weight, dimensions) drive shipping.
+- PRODUCT_ID (VARCHAR): Unique identifier of the product.
+- PRODUCT_CATEGORY_NAME (VARCHAR): Raw product category label in Portuguese (snake_case). For the readable English label, LEFT JOIN PRODUCT_CATEGORY_NAME_TRANSLATION and COALESCE the English name with this raw value. About 70 distinct categories (health_beauty, bed_bath_table, furniture_decor, housewares, sports_leisure and others); query the column for the full list rather than assuming a value exists. About 610 products have no category (NULL); when reporting by category, keep these as their own NULL-label group and do not relabel them.
+- PRODUCT_NAME_LENGHT (BIGINT): Character length of the product name on the listing. Note: the source column is spelled PRODUCT_NAME_LENGHT.
+- PRODUCT_DESCRIPTION_LENGHT (BIGINT): Character length of the product description on the listing. Note: the source column is spelled PRODUCT_DESCRIPTION_LENGHT.
+- PRODUCT_PHOTOS_QTY (BIGINT): Number of photos on the product listing.
+- PRODUCT_WEIGHT_G (BIGINT): Product package weight in grams.
+- PRODUCT_LENGTH_CM (BIGINT): Product package length.
+- PRODUCT_HEIGHT_CM (BIGINT): Product package height.
+- PRODUCT_WIDTH_CM (BIGINT): Product package width.
+
+## SELLERS — An independent merchant that lists products and fulfills order items on the marketplace. One row per seller.
+- SELLER_ID (VARCHAR): Unique identifier of the seller.
+- SELLER_ZIP_CODE_PREFIX (VARCHAR): First digits of the seller's postal code, indicating their area. Join key to the geolocation lookup (dedup it first, see the marketplace domain notes).
+- SELLER_CITY (VARCHAR): City the seller is based in.
+- SELLER_STATE (VARCHAR): State (region) the seller is based in, as a 2-letter code (for example SP, RJ, MG). SP is by far the most common. Common alternate names: São Paulo (SP), Rio de Janeiro (RJ), Minas Gerais (MG).
+
+## Joins
+- MARKETPLACE.ORDER_ITEMS.ORDER_ID = MARKETPLACE.ORDERS.ORDER_ID  ([many_to_one] Each order item belongs to one order; an order contains one or more items.)
+- MARKETPLACE.ORDER_ITEMS.PRODUCT_ID = MARKETPLACE.PRODUCTS.PRODUCT_ID  ([many_to_one] Each order item sells one product; a product appears in many order items.)
+- MARKETPLACE.ORDER_ITEMS.SELLER_ID = MARKETPLACE.SELLERS.SELLER_ID  ([many_to_one] Each order item is sold and fulfilled by one seller; a seller has many order items.)
+- MARKETPLACE.ORDERS.CUSTOMER_ID = MARKETPLACE.CUSTOMERS.CUSTOMER_ID  ([many_to_one] Each order is placed by one customer record. Customer records are per order; the real person is CUSTOMER_UNIQUE_ID on CUSTOMERS.)
+- MARKETPLACE.ORDER_PAYMENTS.ORDER_ID = MARKETPLACE.ORDERS.ORDER_ID  ([many_to_one] Each payment record settles one order; an order can have several payment records.)
+- MARKETPLACE.ORDER_REVIEWS.ORDER_ID = MARKETPLACE.ORDERS.ORDER_ID  ([many_to_one] Each review is about one order; an order usually has one review. Review ids are not unique; dedup by order id.)
+- MARKETPLACE.CLOSED_DEALS.MQL_ID = MARKETPLACE.MARKETING_QUALIFIED_LEADS.MQL_ID  ([one_to_one] Each closed deal converted from exactly one lead.)
+- MARKETPLACE.CLOSED_DEALS.SELLER_ID = MARKETPLACE.SELLERS.SELLER_ID  ([one_to_one] Bridges the acquisition funnel to the marketplace: each closed deal creates one seller. Partial bridge: only about 380 of the 842 closed-deal sellers appear in the marketplace tables (different sampling windows). State this caveat when combining funnel and marketplace data.)
+- MARKETPLACE.PRODUCTS.PRODUCT_CATEGORY_NAME = MARKETPLACE.PRODUCT_CATEGORY_NAME_TRANSLATION.PRODUCT_CATEGORY_NAME  ([many_to_one] Maps the raw Portuguese category to its English label. LEFT JOIN and COALESCE the English name with the raw value; a few categories have no translation row.)
+- MARKETPLACE.SELLERS.SELLER_ZIP_CODE_PREFIX = MARKETPLACE.GEOLOCATION.GEOLOCATION_ZIP_CODE_PREFIX  ([many_to_one after dedup] Seller area coordinates. GEOLOCATION has many duplicate rows per zip prefix: NEVER join it directly (fan-out). Collapse it to one row per prefix in a subquery first (GROUP BY prefix, AVG latitude and longitude), then LEFT JOIN.)
+- MARKETPLACE.CUSTOMERS.CUSTOMER_ZIP_CODE_PREFIX = MARKETPLACE.GEOLOCATION.GEOLOCATION_ZIP_CODE_PREFIX  ([many_to_one after dedup] Customer area coordinates. GEOLOCATION has many duplicate rows per zip prefix: NEVER join it directly (fan-out). Collapse it to one row per prefix in a subquery first (GROUP BY prefix, AVG latitude and longitude), then LEFT JOIN.)
+
+# Domain context
+
+## Marketplace data
+
+This is a Brazilian online marketplace covering a broad catalog (health and beauty, bed bath and table, furniture and decor, housewares, sports and leisure, and dozens of other categories). Independent sellers list products; customers place orders; each order contains one or more order items, and each order item is sold and fulfilled by a single seller.
+
+## How the data is organized
+
+Two connected domains:
+
+- [marketplace](marketplace): orders, order items, products, sellers, customers, payments, reviews, geolocation.
+- [funnel](funnel): the seller acquisition funnel (marketing qualified leads and closed deals).
+
+The only bridge between the two domains is closed deal to seller. Each domain carries topic docs as child domains; open them with get() like any domain path.
+
+## Rules that apply to every question
+
+- Monetary amounts are in EUR: the underlying data is originally in Brazilian Real (BRL) and has been converted to EUR at the current exchange rate. Always render monetary amounts with the EUR currency (€ symbol or 'EUR' code); never use 'R$', '$' or any other currency symbol, even when results break down by Brazilian state.
+- Realized sales are delivered orders: unless the user asks otherwise, restrict revenue, sales and business-volume questions to orders whose status is 'delivered'. This scopes money amounts only: customer membership, cohort assignment and first-order dates consider all orders regardless of status.
+- A customer id is issued per order, so the same real person appears under many customer ids over time. Count distinct customers by their customer unique id, never by the per-order customer id.
+- The data is current: orders span April 2024 through late May 2026. There is no older history; questions about earlier years have no data.
+
+## Governed metrics
+
+Business volume (BV / GMV), average order value (AOV), late delivery rate, order cancellation rate and repeat customer rate are governed metrics defined under [marketplace](marketplace). When a question uses one of these terms, use the metric definition exactly; do not re-derive or approximate it.
+
+## Seller acquisition funnel
+
+Prospective sellers enter as marketing qualified leads; sales closes some of them into deals; a closed deal creates a seller on the marketplace.
+
+## Tables
+
+- **MARKETING_QUALIFIED_LEADS**: one row per lead (id, first contact date, landing page, acquisition channel).
+- **CLOSED_DEALS**: one row per won deal, carrying the declared seller profile at acquisition and the sales reps who handled it.
+
+See [lead lifecycle](funnel/lead-lifecycle) for the acquisition flow, glossary (MQL, SDR, SR), classification axes and data-quality quirks.
+
+## Joining the funnel to the marketplace
+
+The only bridge is CLOSED_DEALS.SELLER_ID to SELLERS.SELLER_ID, and it is partial: only about 380 of the 842 closed-deal sellers appear in the marketplace tables (different sampling windows). State this caveat whenever combining funnel and marketplace data.
+
+## Lead lifecycle
+
+# Lead lifecycle
+
+## How sellers are acquired
+
+1. A prospective seller signs up at a landing page and becomes a lead.
+2. An SDR contacts the lead, confirms information and schedules a consultancy.
+3. An SR runs the consultancy and either closes the deal or loses it.
+4. The signed lead becomes a seller and starts building a catalog.
+5. The seller's products are published on the marketplace, ready to sell.
+
+First contacts span January 2025 to January 2026; deals close from July 2025 to late June 2026.
+
+## Glossary
+
+- MQL (marketing qualified lead): a prospective seller who signed up and was qualified for sales follow-up. One row of MARKETING_QUALIFIED_LEADS per lead.
+- SDR (sales development representative): qualifies the lead and schedules the consultancy. SDR_ID on CLOSED_DEALS.
+- SR (sales representative): runs the consultancy and closes the deal. SR_ID on CLOSED_DEALS.
+
+## Three classification axes (do not confuse them)
+
+- BUSINESS_SEGMENT: the lead's industry vertical (home_appliances, watches, construction_tools, ...).
+- LEAD_TYPE: SDR-assigned sales-stage classification of maturity and online footprint (online_medium, online_big, industry, offline, ...).
+- BUSINESS_TYPE: self-reported nature of the business (reseller, manufacturer, other).
+
+LEAD_BEHAVIOUR_PROFILE is a DISC-style profile assigned by the SDR: cat, eagle, wolf, shark (shark tends to carry the highest deal size). It can be multi-valued ('cat,wolf') and is about 21% null; match with LIKE.
+
+## Quirks
+
+- Declared fields are sparse: HAS_COMPANY, HAS_GTIN and AVERAGE_STOCK are about 92% null; DECLARED_MONTHLY_REVENUE is often 0 with a single outlier around 8.5M EUR.
+- WON_DATE: treat as a date; a few rows carry a synthetic 02:00/03:00 time (Brazil midnight stored as UTC).
+- LANDING_PAGE_ID holds one page per lead row even when the lead visited several; do not infer multi-touch attribution from it.
+- ORIGIN values: organic_search, paid_search, social, affiliate, direct_traffic, email, referral, other, display, other_publicities.
+
+## Marketplace
+
+The transactional heart of the marketplace: customers place orders; an order contains one or more order items; each order item is one product sold and fulfilled by one seller.
+
+## Tables and routing
+
+- **ORDERS** is the hub: items, payments, reviews and customers all join through it. One row per order; money does NOT live here.
+- **ORDER_ITEMS** is the sale grain (one row per order line). PRICE carries business volume; FREIGHT_VALUE is shipping.
+- **CUSTOMERS** are per-order records; the real person is CUSTOMER_UNIQUE_ID.
+- **SELLERS** and **PRODUCTS** (with the PRODUCT_CATEGORY_NAME_TRANSLATION lookup) describe who sells what.
+- **ORDER_PAYMENTS** and **ORDER_REVIEWS** hang off orders.
+- **GEOLOCATION** maps zip prefixes to coordinates; dedup it before any join (see [geography](marketplace/geography)).
+
+## Topic docs
+
+- [Orders and delivery](marketplace/orders-and-delivery): status flow, lifecycle timestamps, on-time rules, order quirks.
+- [Measuring sales](marketplace/measuring-sales): where money lives, delivered-only rule, BV/GMV vocabulary, counting rules.
+- [Catalog and categories](marketplace/catalog-and-categories): Portuguese labels, English translation routing, uncategorized products.
+- [Payments](marketplace/payments): multi-record settlement, boleto and voucher explained, installments.
+- [Reviews](marketplace/reviews): how the survey works, score skew, dedup rules.
+- [Geography](marketplace/geography): states, regions, geolocation dedupe recipe.
+- [Seller performance](marketplace/seller-performance): per-seller sales activity, delivery punctuality, review quality.
+
+## Catalog and categories
+
+# Catalog and categories
+
+## Category labels
+
+PRODUCTS.PRODUCT_CATEGORY_NAME stores the raw category label in Portuguese (snake_case). For the readable English label, LEFT JOIN PRODUCT_CATEGORY_NAME_TRANSLATION on the raw label and COALESCE the English name with the raw value: about 70 categories are translated and a couple lack a translation row.
+
+English labels are snake_case too: health_beauty, bed_bath_table, furniture_decor, housewares, sports_leisure and dozens more. Query the column for the full list rather than assuming a value exists.
+
+## Uncategorized products
+
+About 610 products have no category at all (NULL raw label). When reporting by category, keep them as their own group with a NULL label: do not drop them, and do not invent a label for them (COALESCE only translates existing labels).
+
+## Listing attributes
+
+Physical attributes on PRODUCTS (weight in grams, length, height, width in cm) drive freight. PRODUCT_NAME_LENGHT, PRODUCT_DESCRIPTION_LENGHT and PRODUCT_PHOTOS_QTY describe listing quality (note the source spelling LENGHT).
+
+## Geography
+
+# Geography
+
+## States and regions
+
+Sellers and customers carry a zip code prefix, a city and a state (2-letter Brazilian UF codes). States group into five regions:
+
+- Sudeste: SP, RJ, MG, ES
+- Sul: PR, RS, SC
+- Nordeste: BA, PE, CE, MA, PB, RN, AL, PI, SE
+- Norte: PA, AM, TO, RO, AC, AP, RR
+- Centro-Oeste: GO, MT, MS, DF
+
+Activity is concentrated in the Sudeste: SP alone accounts for roughly 42% of customers and 60% of sellers.
+
+## Coordinates: the dedupe recipe
+
+GEOLOCATION maps zip prefixes to latitude/longitude points: about 1M rows for roughly 19,000 distinct prefixes, so many duplicate rows per prefix. Never join it directly, it fans out and inflates aggregates. To attach coordinates: collapse it to one row per prefix in a subquery (GROUP BY zip prefix with AVG latitude and AVG longitude), then LEFT JOIN on the prefix from SELLERS or CUSTOMERS.
+
+Coordinates are area-level, not exact addresses. Where GEOLOCATION's city or state disagrees with the seller or customer tables, prefer the seller and customer columns.
+
+## Measuring sales
+
+# Measuring sales
+
+## Where money lives
+
+Sale amounts live on ORDER_ITEMS, one row per order line: PRICE is the item sale amount, FREIGHT_VALUE the shipping charged on that line. Never aggregate money at the ORDERS grain: an order spans one or more lines, possibly from different sellers.
+
+## Realized vs gross
+
+Unless the user explicitly asks otherwise, revenue, sales and business-volume questions cover delivered orders only (join ORDER_ITEMS to ORDERS and filter status 'delivered'). Freight is excluded from business volume; it is a separate charge.
+
+## Vocabulary
+
+BV, GMV, gross merchandise value, revenue and sales all mean the same thing here: the governed business_volume metric. Average basket questions map to the average_order_value metric. Use the metric definitions exactly; do not re-derive them. Metric filters scope the measure only: the delivered-only rule applies to money amounts, not to entity definitions. Customer membership, cohort assignment and first-order dates consider all orders regardless of status.
+
+## Counting rules
+
+- Orders: count distinct ORDER_ID.
+- People: count distinct CUSTOMER_UNIQUE_ID on CUSTOMERS, never the per-order CUSTOMER_ID. The repeat_customer_rate metric encodes the repeat-buyer rule.
+- Cancellations: the order_cancellation_rate metric runs over ALL orders regardless of status, not only delivered ones.
+
+All amounts are in EUR; see the root rules for rendering.
+
+## Orders and delivery
+
+# Orders and delivery
+
+## Status flow
+
+An order moves through created and approved (transient: 5 and 2 rows respectively), then invoiced, processing, shipped, and finally delivered. Orders can also end as canceled or unavailable. About 97% of orders are delivered; realized sales are status 'delivered'.
+
+## Lifecycle timestamps (on ORDERS)
+
+- ORDER_PURCHASE_TIMESTAMP: when the order was placed.
+- ORDER_APPROVED_AT: payment approval.
+- ORDER_DELIVERED_CARRIER_DATE: handed to the logistics carrier.
+- ORDER_DELIVERED_CUSTOMER_DATE: delivered to the customer (null until delivered).
+- ORDER_ESTIMATED_DELIVERY_DATE: the delivery date promised to the customer at purchase.
+
+Per order item, SHIPPING_LIMIT_DATE on ORDER_ITEMS is the seller's deadline to hand that item to the carrier.
+
+## Delivery rules
+
+- Delivery days = days from ORDER_PURCHASE_TIMESTAMP to ORDER_DELIVERED_CUSTOMER_DATE.
+- An order is late when ORDER_DELIVERED_CUSTOMER_DATE is after ORDER_ESTIMATED_DELIVERY_DATE, on time otherwise. The governed late_delivery_rate metric encodes this rule; use it for any late-rate question.
+
+## Quirks
+
+- 8 delivered orders lack ORDER_DELIVERED_CUSTOMER_DATE; filter IS NOT NULL for delivery-time analysis.
+- About 775 orders have no order item rows at all (mostly canceled or unavailable): LEFT JOIN from ORDERS when item data might be absent.
+
+## Payments
+
+# Payments
+
+## Settlement model
+
+One row of ORDER_PAYMENTS per (order, payment sequence): an order can be settled by several records, for example a voucher plus a credit card. Amount paid per order is SUM(PAYMENT_VALUE) grouped by ORDER_ID.
+
+## Payment types
+
+- credit_card: about three quarters of payment records.
+- boleto: a prepaid Brazilian bank payment slip, paid at a bank or online (cash-like, no installments). About one fifth of records.
+- voucher: store credit.
+- debit_card, and not_defined (3 rows).
+
+## Installments
+
+PAYMENT_INSTALLMENTS is the number of installments the payment is split into; 1 means paid upfront. Installments are a credit card feature.
+
+## Reviews
+
+# Reviews
+
+## How the survey works
+
+Once the customer receives the product, or the estimated delivery date passes, they get a satisfaction survey by email. This means reviews can exist for orders that were never delivered.
+
+## Scores
+
+REVIEW_SCORE runs from 1 (worst) to 5 (best). Scores skew positive: 5 is by far the largest bucket, with a secondary spike at 1.
+
+## Counting and joining
+
+- REVIEW_ID is NOT unique (a few duplicates exist): never use it as a join key or distinct-count key; dedup by ORDER_ID.
+- Roughly one review per order, but not every order has one and a few orders have more than one. LEFT JOIN from ORDERS.
+
+## Text
+
+Comment titles and messages are optional and mostly in Portuguese; merchant names in the text are anonymized.
+
+## Seller performance
+
+# Seller performance
+
+Attribute everything to a seller via ORDER_ITEMS.SELLER_ID.
+
+## Sales activity
+
+Volume and recency come from ORDER_ITEMS (join on SELLER_ID): items sold, business volume per the governed metric, last sale date. A seller's sales window matters: the catalog spans April 2024 to late May 2026.
+
+## Delivery punctuality
+
+Per-seller on-time behavior follows the delivery rules in [orders and delivery](marketplace/orders-and-delivery): join the seller's order items to ORDERS and compare delivered vs estimated dates. SHIPPING_LIMIT_DATE also shows whether the seller handed items to the carrier on time.
+
+## Review quality
+
+Reviews are order-level, not seller-level: a seller's review signal is the score of orders containing their items. For multi-seller orders the attribution is approximate; state that caveat when it applies.
+
+# Metrics
+
+## Average order value (AOV) (`average_order_value`)
+- Description: Business volume divided by the number of distinct delivered orders. Excludes freight. In EUR.
+- Unit: EUR
+- Also called: AOV, average basket, average basket size
+
+## Business volume (BV) (`business_volume`)
+- Description: Sum of order item price over delivered orders, excluding freight. In EUR. Also called GMV, revenue or sales.
+- Unit: EUR
+- Also called: BV, GMV, gross merchandise value, revenue, sales
+
+## Late delivery rate (`late_delivery_rate`)
+- Description: Share of delivered orders that arrived after their estimated delivery date, as a percentage.
+- Unit: %
+- Also called: late rate, delayed delivery rate
+
+## Order cancellation rate (`order_cancellation_rate`)
+- Description: Share of all orders whose status is 'canceled', as a percentage of all orders regardless of status (no delivered-only filter).
+- Unit: %
+- Also called: cancellation rate, cancel rate
+
+## Repeat customer rate (`repeat_customer_rate`)
+- Description: Share of real customers who placed more than one delivered order: distinct CUSTOMER_UNIQUE_ID with two or more delivered orders, divided by distinct CUSTOMER_UNIQUE_ID with at least one delivered order, as a percentage. Count people by CUSTOMER_UNIQUE_ID, never by the per-order CUSTOMER_ID.
+- Unit: %
+- Also called: repeat rate, returning customer rate
+
+# Metric implementations
+
+## `average_order_value`
+- Expression: SUM("PRICE") / COUNT(DISTINCT "ORDER_ID")
+- Table: MARKETPLACE.ORDER_ITEMS
+- Filters: MARKETPLACE.ORDERS.ORDER_STATUS = 'delivered' (requires JOIN ORDER_ITEMS.ORDER_ID = ORDERS.ORDER_ID)
+
+## `business_volume`
+- Expression: SUM("PRICE")
+- Table: MARKETPLACE.ORDER_ITEMS
+- Filters: MARKETPLACE.ORDERS.ORDER_STATUS = 'delivered' (requires JOIN ORDER_ITEMS.ORDER_ID = ORDERS.ORDER_ID)
+
+## `late_delivery_rate`
+- Expression: 100 * SUM(CASE WHEN "ORDER_DELIVERED_CUSTOMER_DATE" > "ORDER_ESTIMATED_DELIVERY_DATE" THEN 1 ELSE 0 END) / COUNT(*)
+- Table: MARKETPLACE.ORDERS
+- Filters: "ORDER_STATUS" = 'delivered' AND "ORDER_DELIVERED_CUSTOMER_DATE" IS NOT NULL
+
+## `order_cancellation_rate`
+- Expression: 100 * SUM(CASE WHEN "ORDER_STATUS" = 'canceled' THEN 1 ELSE 0 END) / COUNT(*)
+- Table: MARKETPLACE.ORDERS
+- Filters: none
+
+## `repeat_customer_rate`
+- Expression: 100 * (COUNT DISTINCT CUSTOMER_UNIQUE_ID with >= 2 delivered orders) / (COUNT DISTINCT CUSTOMER_UNIQUE_ID with >= 1 delivered order)
+- Table: MARKETPLACE.CUSTOMERS
+- Filters: MARKETPLACE.ORDERS.ORDER_STATUS = 'delivered' (requires JOIN CUSTOMERS.CUSTOMER_ID = ORDERS.CUSTOMER_ID)
+
+# Worked examples (library)
+
+## What share (%) of customers are single-order (one-and-done) customers, among those with at least one delivered order?
+
+```sql
+WITH per_person AS (
+  SELECT c.CUSTOMER_UNIQUE_ID, COUNT(DISTINCT o.ORDER_ID) AS n_orders
+  FROM ORDERS o
+  JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+  WHERE o.ORDER_STATUS = 'delivered'
+  GROUP BY c.CUSTOMER_UNIQUE_ID
+)
+SELECT 100.0 * COUNT(*) FILTER (WHERE n_orders = 1) / COUNT(*) AS single_order_rate_pct
+FROM per_person
+```
+
+## Which 5 customer states have the highest business volume, and how much?
+
+```sql
+SELECT c.CUSTOMER_STATE,
+       SUM(oi.PRICE) AS business_volume
+FROM ORDER_ITEMS oi
+JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+WHERE o.ORDER_STATUS = 'delivered'
+GROUP BY c.CUSTOMER_STATE
+ORDER BY business_volume DESC, c.CUSTOMER_STATE
+LIMIT 5
+```
+
+## On average, how many days pass between a customer's first order and their most recent order (averaged across customers)?
+
+```sql
+WITH per_person AS (
+  SELECT c.CUSTOMER_UNIQUE_ID AS person,
+         date_diff('day', MIN(o.ORDER_PURCHASE_TIMESTAMP), MAX(o.ORDER_PURCHASE_TIMESTAMP)) AS span_days,
+         COUNT(DISTINCT o.ORDER_ID) AS n_orders
+  FROM ORDERS o
+  JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+  GROUP BY c.CUSTOMER_UNIQUE_ID
+)
+SELECT AVG(span_days) AS avg_span_days
+FROM per_person
+WHERE n_orders >= 2
+```

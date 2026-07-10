@@ -1,0 +1,430 @@
+# Operating context
+
+- The data is a static snapshot; treat the current date ('today') as 2026-06-17 for any relative time window.
+- Relative time windows ('last N days') are lower-bounded only: include everything from today minus N days onward, and do not add an upper bound at today.
+
+# Schema
+
+## ORDERS — One row per order: a register transaction at one store by one customer.
+- ORDER_ID (VARCHAR): Unique order identifier.
+- CUSTOMER_ID (VARCHAR): Customer who placed the order.
+- STORE_ID (VARCHAR): Store the order was placed at.
+- ORDERED_AT (TIMESTAMP): When the order was placed.
+- SUBTOTAL (DOUBLE): Order value before sales tax, in USD. The basis for revenue and order-value figures.
+- TAX_PAID (DOUBLE): Sales tax on the order, in USD. The rate varies by store.
+- ORDER_TOTAL (DOUBLE): Amount the customer actually paid: subtotal plus sales tax, in USD.
+
+## ORDER_ITEMS — One row per item inside an order.
+- ORDER_ITEM_ID (VARCHAR): Unique order item identifier.
+- ORDER_ID (VARCHAR): Order this item belongs to.
+- SKU (VARCHAR): Menu product this item is. Join to PRODUCTS for name, type, and price.
+
+## PRODUCTS — One row per menu product (jaffles and beverages).
+- SKU (VARCHAR): Unique product code. JAF-prefixed are jaffles, BEV-prefixed are beverages.
+- PRODUCT_NAME (VARCHAR): Menu name of the product.
+- PRODUCT_TYPE (VARCHAR): 'jaffle' (food) or 'beverage' (drink).
+- PRICE (DOUBLE): Menu price in USD, before tax.
+- DESCRIPTION (VARCHAR): Menu description of the product.
+
+## SUPPLIES — One row per supply used to make a product. Several supplies per product.
+- SUPPLY_ID (VARCHAR): Supply identifier. The same supply can appear under several products.
+- SUPPLY_NAME (VARCHAR): Name of the supply (ingredient or packaging).
+- COST (DOUBLE): Cost of this supply per unit of product made, in USD. A product's unit cost is the SUM of its supply costs.
+- PERISHABLE (BOOLEAN): True if the supply is perishable.
+- SKU (VARCHAR): Product this supply is used for.
+
+## CUSTOMERS — One row per known customer, identified across visits and stores.
+- CUSTOMER_ID (VARCHAR): Unique customer identifier.
+- CUSTOMER_NAME (VARCHAR): Customer's full name.
+
+## STORES — One row per Jaffle Shop location.
+- STORE_ID (VARCHAR): Unique store identifier.
+- STORE_NAME (VARCHAR): City the store is in; used as the store's name.
+- OPENED_AT (TIMESTAMP): Date the store opened.
+- TAX_RATE (DOUBLE): Sales tax rate applied at this store (for example 0.06 = 6%).
+
+## Joins
+- JAFFLE.ORDERS.CUSTOMER_ID = JAFFLE.CUSTOMERS.CUSTOMER_ID  (Each order was placed by one customer.)
+- JAFFLE.ORDERS.STORE_ID = JAFFLE.STORES.STORE_ID  (Each order was placed at one store.)
+- JAFFLE.ORDER_ITEMS.ORDER_ID = JAFFLE.ORDERS.ORDER_ID  (Each order item belongs to one order.)
+- JAFFLE.ORDER_ITEMS.SKU = JAFFLE.PRODUCTS.SKU  (Each order item is one menu product.)
+- JAFFLE.SUPPLIES.SKU = JAFFLE.PRODUCTS.SKU  (Each supply row is used for one product; a product has several supply rows.)
+
+# Domain context
+
+## Jaffle Shop
+
+Jaffle Shop is a cafe chain with six locations across the US. It sells jaffles (pressed toasted sandwiches) and beverages. Every sale rings up as an order at one store, placed by one customer, containing one or more items off the menu.
+
+## How the data is organized
+
+- [sales](sales): orders and the items inside them. The menu (products and supply costs) lives in its child domain.
+- [customers](customers): who buys, and how to measure customer behavior.
+- [stores](stores): the six locations.
+
+The bridge between areas is the order: it links a customer, a store, and items. Any "by store" or "by customer" cut of a sales figure goes through `ORDERS`.
+
+## Rules that apply to every question
+
+- Monetary amounts are in USD.
+- Revenue and order values are pre-tax: use `SUBTOTAL`. `ORDER_TOTAL` includes sales tax, which varies by store, so totals including tax are not comparable across stores.
+- Core grain hierarchy: a customer places orders at a store; an order contains order items; each item is one menu product.
+
+## Answering business terms
+
+When a question uses a business qualifier or membership term that is not a column (for example "active", "regular", "top", "lapsed", "new"), first open the relevant domain document(s) and use any definition found there. If no document defines the term, do not pick a threshold silently: state the assumption you would make, name the other reasonable readings (threshold and time window), and ask the user to confirm or define it. Prefer asking over guessing whenever the choice would materially change the answer.
+
+## Sales
+
+A sale is one order: a register transaction at one store by one customer, holding one or more items. Item-level questions (what was ordered, product mix) go through `ORDER_ITEMS` joined to the menu; order-level questions (revenue, order counts, basket size) stay on `ORDERS`, whose money columns are already order-level totals. Do not sum item prices to rebuild an order's value; `SUBTOTAL` already carries it.
+
+Child domain:
+
+- [menu](sales/menu): the products on the menu and what they cost us to make.
+
+## Menu
+
+The menu is small and fixed: jaffles and beverages (`PRODUCT_TYPE`). "Best sellers" or product-mix questions count `ORDER_ITEMS` rows by product. The cost side lives in `SUPPLIES`: several supply rows per product, so a product's unit cost is the SUM of its supply costs, never a single row's value.
+
+## Customers
+
+One row per known customer, identified across visits and stores. The table carries identity only; everything behavioral (how often they come, what they spend, when they were last seen) is derived from their orders.
+
+Child domain:
+
+- [measuring customers](customers/measuring): how to compute customer behavior figures from orders.
+
+## Measuring customers
+
+How to turn orders into per-customer figures. None of these are stored; derive them by grouping `ORDERS` by `CUSTOMER_ID`.
+
+- Visit frequency: count a customer's orders over a time window.
+- Customer spend: sum a customer's pre-tax `SUBTOTAL` over a window.
+- Recency: a customer's most recent `ORDERED_AT`.
+- First visit: a customer's earliest `ORDERED_AT`.
+
+A customer's home store is not stored either; if needed, take the store where they have placed the most orders. For store-level customer questions, group the same derivations by `STORE_ID` as well.
+
+## Stores
+
+Six locations, named by city. Store-level cuts of any sales or customer figure go through `ORDERS.STORE_ID`. Stores opened on different dates (`OPENED_AT`), so year-over-year comparisons across stores are only fair for stores open the whole period. Sales tax rate is per store, which is why the same subtotal yields different `ORDER_TOTAL` at different stores.
+
+# Metrics
+
+## Revenue (`revenue`)
+- Description: Total order value before sales tax, in USD. The company's headline revenue figure.
+- Unit: USD
+- Also called: sales, turnover, net sales
+
+## Orders (`order_count`)
+- Description: Number of orders.
+- Unit: count
+- Also called: number of orders, order volume, tickets
+
+## Average order value (`average_order_value`)
+- Description: Average pre-tax value of an order, in USD.
+- Unit: USD
+- Also called: AOV, average basket, average ticket
+
+# Metric implementations
+
+## `revenue`
+- Expression: SUM("SUBTOTAL")
+- Table: JAFFLE.ORDERS
+- Filters: none
+
+## `order_count`
+- Expression: COUNT(*)
+- Table: JAFFLE.ORDERS
+- Filters: none
+
+## `average_order_value`
+- Expression: AVG("SUBTOTAL")
+- Table: JAFFLE.ORDERS
+- Filters: none
+
+# Answer templates (library — find the one matching the question, fill the `<???>`)
+
+## How many customers spent more in the last 90 days than in the 90 days before that?
+
+```sql
+WITH per_customer AS (
+  SELECT CUSTOMER_ID,
+         SUM(SUBTOTAL) FILTER (
+           WHERE ORDERED_AT >= DATE <???> - INTERVAL 90 DAY) AS last90,
+         SUM(SUBTOTAL) FILTER (
+           WHERE ORDERED_AT >= DATE '2026-06-17' - INTERVAL 180 DAY
+             AND ORDERED_AT <  DATE '2026-06-17' - INTERVAL 90 DAY) AS prior90
+  FROM ORDERS
+  GROUP BY CUSTOMER_ID
+)
+SELECT COUNT(*) AS accelerating_customers
+FROM per_customer
+WHERE COALESCE(last90, 0) > COALESCE(prior90, 0)
+```
+
+## What is our average order value?
+
+```sql
+SELECT AVG(SUBTOTAL) AS average_order_value
+FROM ORDERS
+```
+
+## On average, how many days elapse between a customer's consecutive orders (averaged across customers)?
+
+```sql
+WITH gaps AS (
+  SELECT CUSTOMER_ID,
+         date_diff(<???>,
+                   LAG(ORDERED_AT) OVER (PARTITION BY CUSTOMER_ID ORDER BY ORDERED_AT),
+                   ORDERED_AT) AS gap_days
+  FROM ORDERS
+),
+per_customer AS (
+  SELECT CUSTOMER_ID, AVG(gap_days) AS avg_gap
+  FROM gaps
+  WHERE gap_days IS NOT NULL
+  GROUP BY CUSTOMER_ID
+)
+SELECT AVG(avg_gap) AS avg_days_between_orders
+FROM per_customer
+```
+
+## What is the beverage attach rate, i.e. the share (%) of orders that contain at least one beverage item?
+
+```sql
+SELECT 100.0 * COUNT(*) FILTER (
+         WHERE EXISTS (
+           SELECT 1 FROM ORDER_ITEMS oi
+           JOIN PRODUCTS p ON oi.SKU = p.SKU
+           WHERE oi.ORDER_ID = o.ORDER_ID AND p.PRODUCT_TYPE = <???>
+         )) / COUNT(*) AS beverage_attach_rate_pct
+FROM ORDERS o
+```
+
+## For each acquisition-month cohort (customers grouped by the month of their first ever order), how many customers are in the cohort and what is their total lifetime revenue?
+
+```sql
+WITH firsts AS (
+  SELECT CUSTOMER_ID,
+         date_trunc(<???>, MIN(ORDERED_AT)) AS cohort_month
+  FROM ORDERS
+  GROUP BY CUSTOMER_ID
+)
+SELECT f.cohort_month,
+       COUNT(DISTINCT f.CUSTOMER_ID) AS cohort_customers,
+       SUM(o.SUBTOTAL) AS cohort_lifetime_revenue
+FROM firsts f
+JOIN ORDERS o ON o.CUSTOMER_ID = f.CUSTOMER_ID
+GROUP BY f.cohort_month
+ORDER BY f.cohort_month
+```
+
+## What is the running cumulative revenue by month (revenue to date at the end of each month)?
+
+```sql
+WITH monthly AS (
+  SELECT date_trunc(<???>, ORDERED_AT) AS month, SUM(SUBTOTAL) AS rev
+  FROM ORDERS
+  GROUP BY 1
+)
+SELECT month,
+       SUM(rev) OVER (ORDER BY month
+                      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_rev
+FROM monthly
+ORDER BY month
+```
+
+## How many customers have lapsed, i.e. ordered before the last 90 days but not at all within the last 90 days?
+
+```sql
+SELECT COUNT(*) AS lapsed_customers
+FROM (
+  SELECT DISTINCT CUSTOMER_ID
+  FROM ORDERS
+  WHERE ORDERED_AT < DATE <???> - INTERVAL 90 DAY
+) prior
+WHERE NOT EXISTS (
+  SELECT 1 FROM ORDERS o
+  WHERE o.CUSTOMER_ID = prior.CUSTOMER_ID
+    AND o.ORDERED_AT >= DATE '2026-06-17' - INTERVAL 90 DAY
+)
+```
+
+## What is the month-over-month revenue growth rate (%) for each month?
+
+```sql
+WITH monthly AS (
+  SELECT date_trunc(<???>, ORDERED_AT) AS month, SUM(SUBTOTAL) AS rev
+  FROM ORDERS
+  GROUP BY 1
+)
+SELECT month,
+       rev,
+       100.0 * (rev - LAG(rev) OVER (ORDER BY month))
+             / LAG(rev) OVER (ORDER BY month) AS growth_pct
+FROM monthly
+ORDER BY month
+```
+
+## How many new customers did we acquire in the last 90 days (customers whose first ever order falls in the window)?
+
+```sql
+SELECT COUNT(*) AS new_customers_last_90d
+FROM (
+  SELECT CUSTOMER_ID, MIN(ORDERED_AT) AS first_order
+  FROM ORDERS
+  GROUP BY CUSTOMER_ID
+)
+WHERE first_order >= DATE <???> - INTERVAL 90 DAY
+```
+
+## How many orders have we had in total?
+
+```sql
+SELECT COUNT(*) AS order_count
+FROM ORDERS
+```
+
+## How many orders did we have in the last 90 days?
+
+```sql
+SELECT COUNT(*) AS order_count_last_90d
+FROM ORDERS
+WHERE ORDERED_AT >= DATE <???> - INTERVAL 90 DAY
+```
+
+## What is our repeat-customer rate, i.e. the share (%) of customers who have placed at least 2 orders?
+
+```sql
+WITH per_customer AS (
+  SELECT CUSTOMER_ID, COUNT(*) AS n_orders
+  FROM ORDERS
+  GROUP BY CUSTOMER_ID
+)
+SELECT <???> * COUNT(*) FILTER (WHERE n_orders >= 2) / COUNT(*) AS repeat_customer_rate_pct
+FROM per_customer
+```
+
+## What is total revenue by month?
+
+```sql
+SELECT date_trunc(<???>, ORDERED_AT) AS month, SUM(SUBTOTAL) AS revenue
+FROM ORDERS
+GROUP BY month
+ORDER BY month
+```
+
+## What is product revenue split by product type (jaffle vs beverage)?
+
+```sql
+SELECT p.PRODUCT_TYPE, SUM(p.PRICE) AS product_revenue
+FROM ORDER_ITEMS oi
+JOIN PRODUCTS p ON oi.SKU = p.SKU
+GROUP BY p.PRODUCT_TYPE
+ORDER BY product_revenue DESC
+```
+
+## What is total revenue by store, for the top 5 stores?
+
+```sql
+SELECT s.STORE_NAME, SUM(o.SUBTOTAL) AS revenue
+FROM ORDERS o
+JOIN STORES s ON o.STORE_ID = s.STORE_ID
+GROUP BY s.STORE_NAME
+ORDER BY revenue DESC
+LIMIT <???>
+```
+
+## What was our revenue in the last 90 days?
+
+```sql
+SELECT SUM(SUBTOTAL) AS revenue_last_90d
+FROM ORDERS
+WHERE ORDERED_AT >= DATE <???> - INTERVAL 90 DAY
+```
+
+## Which store has the highest average order value, and what is it?
+
+```sql
+SELECT s.STORE_NAME, AVG(o.SUBTOTAL) AS average_order_value
+FROM ORDERS o
+JOIN STORES s ON o.STORE_ID = s.STORE_ID
+GROUP BY s.STORE_NAME
+ORDER BY average_order_value DESC
+LIMIT <???>
+```
+
+## What is each store's share (%) of total company revenue?
+
+```sql
+SELECT s.STORE_NAME,
+       SUM(o.SUBTOTAL) AS revenue,
+       <???> * SUM(o.SUBTOTAL) / SUM(SUM(o.SUBTOTAL)) OVER () AS pct_of_total
+FROM ORDERS o
+JOIN STORES s ON o.STORE_ID = s.STORE_ID
+GROUP BY s.STORE_NAME
+ORDER BY revenue DESC
+```
+
+## For each store, what was its revenue in the last 90 days versus the 90 days before that, and the growth rate (%) between them?
+
+```sql
+WITH per_store AS (
+  SELECT STORE_ID,
+         SUM(SUBTOTAL) FILTER (
+           WHERE ORDERED_AT >= DATE <???> - INTERVAL 90 DAY) AS last90,
+         SUM(SUBTOTAL) FILTER (
+           WHERE ORDERED_AT >= DATE '2026-06-17' - INTERVAL 180 DAY
+             AND ORDERED_AT <  DATE '2026-06-17' - INTERVAL 90 DAY) AS prior90
+  FROM ORDERS
+  GROUP BY STORE_ID
+)
+SELECT s.STORE_NAME,
+       ps.prior90,
+       ps.last90,
+       100.0 * (ps.last90 - ps.prior90) / ps.prior90 AS growth_pct
+FROM per_store ps
+JOIN STORES s ON ps.STORE_ID = s.STORE_ID
+ORDER BY growth_pct DESC, s.STORE_NAME
+```
+
+## Who are the top 5 customers by total spend, with their spend?
+
+```sql
+SELECT c.CUSTOMER_NAME, SUM(o.SUBTOTAL) AS total_spend
+FROM ORDERS o
+JOIN CUSTOMERS c ON o.CUSTOMER_ID = c.CUSTOMER_ID
+GROUP BY c.CUSTOMER_ID, c.CUSTOMER_NAME
+ORDER BY total_spend DESC
+LIMIT <???>
+```
+
+## What is the best-selling product (by number of items sold) at each store?
+
+```sql
+WITH counts AS (
+  SELECT o.STORE_ID, oi.SKU, COUNT(*) AS items_sold
+  FROM ORDER_ITEMS oi
+  JOIN ORDERS o ON oi.ORDER_ID = o.ORDER_ID
+  GROUP BY o.STORE_ID, oi.SKU
+),
+ranked AS (
+  SELECT counts.*,
+         ROW_NUMBER() OVER (PARTITION BY STORE_ID ORDER BY items_sold DESC, SKU) AS rn
+  FROM counts
+)
+SELECT s.STORE_NAME, p.PRODUCT_NAME, ranked.items_sold
+FROM ranked
+JOIN STORES s ON ranked.STORE_ID = s.STORE_ID
+JOIN PRODUCTS p ON ranked.SKU = p.SKU
+WHERE ranked.rn = <???>
+ORDER BY s.STORE_NAME
+```
+
+## What is our total revenue?
+
+```sql
+SELECT SUM(SUBTOTAL) AS revenue
+FROM ORDERS
+```

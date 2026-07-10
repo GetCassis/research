@@ -3,9 +3,9 @@
 Reads results/runs/<run>.jsonl, produces figures in results/figures/ and a
 plain-language results/summary.md. Tests hypotheses H1-H4 (see README).
 
-The derivation-distance axis is config.DERIVATION_LEVELS (L1..L6), all complete;
+The derivation-distance axis is config.DERIVATION_LEVELS (descriptions -> examples), all complete;
 the headline accuracy line and every per-level line plot cover that axis only.
-config.SIDE_ARMS (L0 bare schema) is deliberately incomplete and is reported
+config.SIDE_ARMS (bare_schema) is deliberately incomplete and is reported
 separately (a distinct marker on the accuracy figure, its own summary section).
 
 Usage:
@@ -29,7 +29,7 @@ import config
 
 DPI = 150
 
-# The derivation-distance axis (L1..L6), all complete. Completeness held constant
+# The derivation-distance axis (descriptions -> examples), all complete. Completeness held constant
 # across this axis, so accuracy differences here are derivation distance.
 DERIVATION_LEVELS = list(config.DERIVATION_LEVELS)
 # Side arm(s): bare schema with NO required facts (deliberately incomplete).
@@ -37,15 +37,15 @@ DERIVATION_LEVELS = list(config.DERIVATION_LEVELS)
 SIDE_ARMS = list(config.SIDE_ARMS)
 # Full set of levels that may appear in a run (side arms + derivation axis).
 LEVEL_ORDER = list(config.LEVELS)
-LEVEL_SHORT = {name: name.split("_")[0] for name in LEVEL_ORDER}  # "L1_schema_descriptions" -> "L1"
+LEVEL_SHORT = {name: name.split("_")[0] for name in LEVEL_ORDER}  # first name component
 
 # Baseline of the derivation axis (max derivation distance, still complete).
-BASELINE = DERIVATION_LEVELS[0]              # "L1_schema_descriptions"
-BASELINE_SHORT = LEVEL_SHORT[BASELINE]       # "L1"
-TOP = DERIVATION_LEVELS[-1]                  # "L6_answer_templates"
-TOP_SHORT = LEVEL_SHORT[TOP]                 # "L6"
-ANCHOR = config.ANCHOR_LEVEL                 # "L4_metric_formulas" (canonical ontology)
-ANCHOR_SHORT = LEVEL_SHORT[ANCHOR]           # "L4"
+BASELINE = DERIVATION_LEVELS[0]              # "descriptions"
+BASELINE_SHORT = LEVEL_SHORT[BASELINE]       # "descriptions"
+TOP = DERIVATION_LEVELS[-1]                  # "templates"
+TOP_SHORT = LEVEL_SHORT[TOP]                 # "examples"
+ANCHOR = config.ANCHOR_LEVEL                 # "metrics" (canonical ontology)
+ANCHOR_SHORT = LEVEL_SHORT[ANCHOR]           # "metrics"
 
 # Model display order (capability-ascending) and stable colours.
 MODEL_ORDER = ["haiku", "sonnet", "opus"]
@@ -105,12 +105,12 @@ def levels_in(df):
 
 
 def derivation_levels_in(df):
-    """Derivation-axis levels actually present, in config order (L1..L6). No side arms."""
+    """Derivation-axis levels actually present, in config order (descriptions -> examples). No side arms."""
     return [lv for lv in DERIVATION_LEVELS if (df["level"] == lv).any()]
 
 
 def side_arms_in(df):
-    """Side-arm levels actually present (e.g. L0), in config order."""
+    """Side-arm levels actually present (e.g. bare_schema), in config order."""
     return [lv for lv in SIDE_ARMS if (df["level"] == lv).any()]
 
 
@@ -207,9 +207,9 @@ def _x_axis_setup(ax, levels):
 def fig_accuracy_vs_level(agg, deriv_levels, side_arms, out_path):
     """HEADLINE: accuracy vs derivation level, one line per model. Tests H1 (knee) & H2 (fan-out).
 
-    The connected line covers the DERIVATION axis only (L1..L6). The L0 bare-schema
+    The connected line covers the DERIVATION axis only (descriptions -> examples). The bare-schema
     side arm is deliberately INCOMPLETE and is NOT a point on this line: it is drawn
-    as a separate marker to the LEFT of L1, with its own legend entry.
+    as a separate marker to the LEFT of the axis, with its own legend entry.
     """
     fig, ax = plt.subplots(figsize=(8.5, 5))
 
@@ -217,7 +217,7 @@ def fig_accuracy_vs_level(agg, deriv_levels, side_arms, out_path):
     # negative positions, visually detached from the connected line.
     xmap = {lv: i for i, lv in enumerate(deriv_levels)}
     n_arms = len(side_arms)
-    side_x = {sa: -1 - (n_arms - 1 - i) for i, sa in enumerate(side_arms)}  # e.g. L0 at -1
+    side_x = {sa: -1 - (n_arms - 1 - i) for i, sa in enumerate(side_arms)}  # side arm at -1
 
     # x ticks: side arms (left) + derivation levels.
     tick_pos = [side_x[sa] for sa in side_arms] + [xmap[lv] for lv in deriv_levels]
@@ -283,7 +283,7 @@ def fig_accuracy_vs_level(agg, deriv_levels, side_arms, out_path):
 def fig_cost_frontier(agg, deriv_levels, out_path):
     """Cost frontier: x = $ per correct answer, y = accuracy. One line per model. Tests H3.
 
-    Derivation axis only (L1..L6); the incomplete L0 side arm is excluded.
+    Derivation axis only (descriptions -> examples); the incomplete bare-schema side arm is excluded.
     """
     fig, ax = plt.subplots(figsize=(8, 5))
 
@@ -323,7 +323,7 @@ def fig_reliability_vs_level(agg, deriv_levels, out_path):
     For each (model, level) we compute, over its questions:
       always = fraction solved in ALL N samples  -> SOLID line + markers
       any    = fraction solved in AT LEAST ONE   -> FAINT DASHED line, same colour
-    Derivation axis only (L1..L6); the incomplete L0 side arm is excluded.
+    Derivation axis only (descriptions -> examples); the incomplete bare-schema side arm is excluded.
     """
     fig, ax = plt.subplots(figsize=(8.5, 5))
     xmap = _x_axis_setup(ax, deriv_levels)
@@ -370,7 +370,7 @@ def fig_reliability_vs_level(agg, deriv_levels, out_path):
 def fig_context_tokens_vs_level(agg, deriv_levels, out_path):
     """Context tokens vs derivation level (length/cost covariate, roughly model-independent).
 
-    Derivation axis only (L1..L6); the incomplete L0 side arm is excluded.
+    Derivation axis only (descriptions -> examples); the incomplete bare-schema side arm is excluded.
     """
     fig, ax = plt.subplots(figsize=(8, 5))
     xmap = _x_axis_setup(ax, deriv_levels)
@@ -401,8 +401,8 @@ def fig_context_tokens_vs_level(agg, deriv_levels, out_path):
 def knee_level(sub):
     """Lowest derivation level reaching >=90% of this model's max accuracy.
 
-    Computed over the DERIVATION axis only (L1..L6); the incomplete L0 side arm
-    is excluded. "Lowest level" here means the highest-derivation-distance rung (L1
+    Computed over the DERIVATION axis only (descriptions -> examples); the incomplete bare-schema side arm
+    is excluded. "Lowest level" here means the highest-derivation-distance rung (descriptions
     first), so the knee is the cheapest rung that already gets you ~there.
     Returns a short label or None.
     """
@@ -487,7 +487,7 @@ def build_summary(df, df_clean, agg, run_name):
       f"{ANCHOR_SHORT} = `{ANCHOR}` = the canonical published ontology. "
       f"All three landmark columns are derivation-axis levels (complete); the incomplete "
       f"{LEVEL_SHORT[SIDE_ARMS[0]]} side arm is reported separately below.\n")
-    A(f"| model | knee | acc @ {BASELINE_SHORT} (L1) | "
+    A(f"| model | knee | acc @ {BASELINE_SHORT} (baseline) | "
       f"acc @ {ANCHOR_SHORT} (canonical) | acc @ {TOP_SHORT} | max acc |")
     A("|---|---|---:|---:|---:|---:|")
     landmark = {}
@@ -505,7 +505,7 @@ def build_summary(df, df_clean, agg, run_name):
           f"{fmt_pct(a_top)} | {fmt_pct(amax)} |")
     A("")
 
-    # -- H2 read: L1 -> L4 gain --------------------------------------------
+    # -- H2 read: baseline -> anchor gain --------------------------------------------
     A("## H2 read — capability interaction (the headline)\n")
     A(f"H2 predicts weaker models gain *more* accuracy as derivation distance drops "
       f"(steeper curve). We measure the accuracy gain from {BASELINE_SHORT} (shared ontology, max effort, "
@@ -549,7 +549,7 @@ def build_summary(df, df_clean, agg, run_name):
         A(f"_Not enough models with both {BASELINE_SHORT} and {ANCHOR_SHORT} present "
           "to evaluate H2._\n")
 
-    # -- Completeness side-arm (L0) ----------------------------------------
+    # -- Completeness side-arm (bare_schema) ----------------------------------------
     side_arms = side_arms_in(df)
     if side_arms:
         sa = side_arms[0]
@@ -623,7 +623,7 @@ def find_quotable(agg, models):
     for wi in range(len(present)):
         for si in range(wi + 1, len(present)):
             weak, strong = present[wi], present[si]
-            # Derivation axis only; the incomplete L0 side arm is excluded.
+            # Derivation axis only; the incomplete bare-schema side arm is excluded.
             ws = agg[(agg["model"] == weak) & (agg["level"].isin(DERIVATION_LEVELS))].sort_values("level")
             ss = agg[(agg["model"] == strong) & (agg["level"].isin(DERIVATION_LEVELS))].sort_values("level")
             if ws.empty or ss.empty:
@@ -675,13 +675,13 @@ def main():
 
     fig_dir = os.path.join(config.BASE, "results", "figures")
     os.makedirs(fig_dir, exist_ok=True)
-    deriv_levels = derivation_levels_in(df)   # L1..L6 (the derivation-distance axis)
-    side_arms = side_arms_in(df)              # L0 (incomplete side arm, reported separately)
+    deriv_levels = derivation_levels_in(df)   # the derivation-distance axis
+    side_arms = side_arms_in(df)              # incomplete side arm, reported separately
 
     if agg.empty:
         print("WARNING: no error-free rows to aggregate; figures will be empty.")
     if not deriv_levels:
-        print("WARNING: no derivation-axis levels (L1..L6) present; line figures will be empty.")
+        print("WARNING: no derivation-axis levels (descriptions -> examples) present; line figures will be empty.")
 
     paths = {
         "accuracy": os.path.join(fig_dir, f"{args.run}_accuracy_vs_level.png"),

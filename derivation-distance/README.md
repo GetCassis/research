@@ -4,34 +4,36 @@ The full harness, data, and results behind the Cassis study of **derivation
 distance** — how far a model must travel from the context it is shown to the
 answer it gives — and how that interacts with model capability.
 
-The write-up is in [`ARTICLE.md`](ARTICLE.md). In one line: we render the same
-analytics questions against the same warehouse under contexts that vary only in
-how spelled-out the implementation is (from bare schema to a worked-example
-library), across three models (Haiku 4.5, Sonnet 4.6, Opus 4.8), and grade the
-SQL they write by executing it.
+In one line: we render the same analytics questions against the same warehouse
+under contexts that vary only in how spelled-out the implementation is (from
+bare schema to a worked-example library), across three models (Haiku 4.5,
+Sonnet 4.6, Opus 4.8), and grade the SQL they write by executing it.
 
-## The ladder (independent variable)
+## The context levels (independent variable)
 
 The context is the published ontology shown at increasing depth. It is
 **identical across all questions at every level** — the model must locate the
 relevant table / metric / rule itself, so discoverability is part of the task.
 
-| Level | Context contains | On the axis? |
-|-------|------------------|--------------|
-| `L0_bare_schema` | table + column names only — no descriptions, no facts | side arm (deliberately incomplete) |
-| `L1_schema_descriptions` | schema + column descriptions + global operating facts (snapshot date, window rule) | yes — max distance |
-| `L2_prose_rules` | + domain prose (rules, guardrails) | yes |
-| `L3_named_metrics` | + metric name/description/unit, **no expression** | yes |
-| `L4_metric_formulas` | + metric expression + filters + table (the full published ontology) | yes |
-| `L5_example_library` | + the **full worked-example library** (model finds the relevant analogue) | yes |
-| `L6_answer_templates` | + the **full template gallery**: every question's gold SQL with one literal blanked | yes |
+| Level | Context contains | Role |
+|-------|------------------|------|
+| `bare_schema` | table + column names only — no descriptions, no facts | side arm (deliberately incomplete) |
+| `descriptions` | schema + column descriptions + global operating facts (snapshot date, window rule) | axis — max distance |
+| `metrics` | + domain prose (rules, guardrails), named metrics, and metric expressions — the full published ontology | axis |
+| `examples` | + the **full worked-example library** (model finds the relevant analogue) | axis |
+| `templates` | + the **full template gallery**: every question's gold SQL with one literal blanked | comparison arm |
 
-Ablation variants (comparison arms, off the main axis): `L5_library_heldout` /
-`L6_templates_heldout` (leave-one-out: the question's own entry removed),
-`L5_relevant_3` / `L5_irrelevant_3` (size-matched 3-example libraries picked by
-structural similarity), `L5_relevant_3_question` / `L5_relevant_3_goldsql`
-(3 examples picked by question-text similarity / gold-SQL token overlap), and
-`L5_single_example` / `L6_single_template` (historical single-item arms).
+Ablation variants (comparison arms): `examples_heldout` / `templates_heldout`
+(leave-one-out: the question's own entry removed), `relevant_3` /
+`irrelevant_3` (size-matched 3-example libraries picked by structural
+similarity), and `relevant_3_question` / `relevant_3_goldsql` (3 examples
+picked by question-text similarity / gold-SQL token overlap).
+
+Every level's rendered context body is committed under
+`data/contexts/<dataset>/` — `<level>.body.txt` for the shared levels, and
+`<level>/<question_id>.body.txt` for the per-question ablation arms — so you
+can inspect exactly what the models saw. A run prepends only a `# Question`
+block to these bodies.
 
 ## The measurement
 
@@ -47,11 +49,11 @@ structural similarity), `L5_relevant_3_question` / `L5_relevant_3_goldsql`
   missing columns). Invalid SQL counts as incorrect. See `src/grade.py`.
 - **N = 3** samples per (model × level × question) cell, for repeatability.
 
-## Reproduce the article figures (no API calls, no data download)
+## Reproduce the figures (no API calls, no data download)
 
 The published run files are in `results/runs/` (see
 [`results/runs/README.md`](results/runs/README.md)), so regenerating every
-figure and number in the article is offline:
+figure and number in the write-up is offline:
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
@@ -70,26 +72,25 @@ python datasets/download.py              # ~70 MB of CSVs, checksum-verified
 
 export ANTHROPIC_API_KEY=...
 .venv/bin/python src/run.py --run myrun --datasets jaffle-shop thelook olist \
-    --levels L0_bare_schema L1_schema_descriptions L4_metric_formulas L5_example_library \
+    --levels bare_schema descriptions metrics examples \
     --samples 3 --concurrency 8
 .venv/bin/python src/analyze.py --run myrun
 ```
 
 Cost note: the main 2,484-cell grid (4 levels × 3 models × 69 questions × 3
-samples) cost about **$47** in API calls at mid-2026 prices; the full 7-level
-factorial about $90.
+samples) cost about **$47** in API calls at mid-2026 prices.
 
 ## Layout
 
 ```
 datasets/<ds>/       ontology.json + SOURCE.md; data/*.csv.gz via download.py
 data/questions/      question sets + gold SQL (the benchmark definition)
+data/contexts/       the rendered context bodies, per (dataset, level) — committed
 data/gold/           executed gold snapshots (generated)
-data/contexts/       pre-rendered context bodies (generated)
 data/<ds>.duckdb     built warehouse (generated)
 src/                 harness (see docs/CONTRACT.md for module interfaces)
 results/runs/        published run files (one JSON line per cell)
-images/              the article's figures (regenerable via src/article_charts.py)
+images/              the study's figures (regenerable via src/article_charts.py)
 ```
 
 ## License

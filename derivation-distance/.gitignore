@@ -3,7 +3,7 @@ __pycache__/
 data/*.duckdb
 data/*.duckdb.wal
 data/*.duckdb.tmp/
-data/contexts/
+data/contexts/*.txt
 data/gold/
 datasets/*/data/
 results/figures/

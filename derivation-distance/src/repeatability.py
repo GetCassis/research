@@ -18,7 +18,7 @@ import config
 import questions
 
 N = 3
-LEVELS = config.LEVELS  # L0 + L1..L6
+LEVELS = config.LEVELS
 SHORT = {l: l.split("_")[0] for l in LEVELS}
 MODELS = ["haiku", "sonnet", "opus"]
 
@@ -121,7 +121,7 @@ def main():
     ax.set_xticks(xs)
     ax.set_xticklabels([SHORT[l] for l in LEVELS])
     ax.set_ylabel("% of (model x question) cells")
-    ax.set_xlabel("Context level (L0 bare schema -> L6 templated gold)")
+    ax.set_xlabel("Context level")
     ax.set_title(f"Repeatability across {N} samples, by context level\n"
                  "(decisive top+bottom bands; flaky middle bands)")
     ax.legend(loc="lower center", ncol=4, fontsize=8, framealpha=0.9)

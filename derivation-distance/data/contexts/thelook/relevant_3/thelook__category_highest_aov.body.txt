@@ -1,0 +1,267 @@
+# Operating context
+
+- The data is a static snapshot; treat the current date ('today') as 2026-04-25 for any relative time window.
+- Relative time windows ('last N days') are lower-bounded only: include everything from today minus N days onward, and do not add an upper bound at today.
+
+# Schema
+
+## ORDERS — One row per order placed by a user.
+- ORDER_ID (BIGINT): Unique order identifier.
+- USER_ID (BIGINT): The user who placed the order. Joins to USERS.ID.
+- STATUS (VARCHAR): Order status: Processing, Shipped, Complete, Cancelled, Returned.
+- GENDER (VARCHAR): Gender recorded on the order.
+- CREATED_AT (TIMESTAMP): When the order was placed.
+- RETURNED_AT (TIMESTAMP): When the order was returned, if it was. Null otherwise.
+- SHIPPED_AT (TIMESTAMP): When the order shipped.
+- DELIVERED_AT (TIMESTAMP): When the order was delivered.
+- NUM_OF_ITEM (BIGINT): Number of items in the order.
+
+## ORDER_ITEMS — One row per item sold within an order. The grain for revenue.
+- ID (BIGINT): Unique order-item identifier.
+- ORDER_ID (BIGINT): The order this item belongs to. Joins to ORDERS.ORDER_ID.
+- USER_ID (BIGINT): The buyer. Joins to USERS.ID.
+- PRODUCT_ID (BIGINT): The product. Joins to PRODUCTS.ID.
+- INVENTORY_ITEM_ID (BIGINT): The physical unit fulfilled. Joins to INVENTORY_ITEMS.ID.
+- STATUS (VARCHAR): Item status: Processing, Shipped, Complete, Cancelled, Returned.
+- CREATED_AT (TIMESTAMP): When the item was ordered.
+- SHIPPED_AT (TIMESTAMP): When the item shipped.
+- DELIVERED_AT (TIMESTAMP): When the item was delivered.
+- RETURNED_AT (TIMESTAMP): When the item was returned, if it was.
+- SALE_PRICE (DOUBLE): Per-item sale price (revenue), in USD. The basis of revenue: sum it over items that were not cancelled and not returned (STATUS NOT IN ('Cancelled','Returned')) per the revenue metric; cancelled and returned items do not count.
+
+## PRODUCTS — The product catalog.
+- ID (BIGINT): Unique product identifier.
+- COST (DOUBLE): Unit cost to the retailer. USD.
+- CATEGORY (VARCHAR): Product category.
+- NAME (VARCHAR): Product name.
+- BRAND (VARCHAR): Product brand.
+- RETAIL_PRICE (DOUBLE): List/retail price. USD.
+- DEPARTMENT (VARCHAR): Department (e.g. Men, Women).
+- SKU (VARCHAR): Stock keeping unit.
+- DISTRIBUTION_CENTER_ID (BIGINT): Home distribution center. Joins to DISTRIBUTION_CENTERS.ID.
+
+## INVENTORY_ITEMS — Individual physical units of stock.
+- ID (BIGINT): Unique inventory-item identifier.
+- PRODUCT_ID (BIGINT): The product. Joins to PRODUCTS.ID.
+- CREATED_AT (TIMESTAMP): When the unit entered inventory.
+- SOLD_AT (TIMESTAMP): When the unit was sold, if it was.
+- COST (DOUBLE): Unit cost. USD.
+- PRODUCT_CATEGORY (VARCHAR): Denormalized product category.
+- PRODUCT_NAME (VARCHAR): Denormalized product name.
+- PRODUCT_BRAND (VARCHAR): Denormalized product brand.
+- PRODUCT_RETAIL_PRICE (DOUBLE): Denormalized retail price. USD.
+- PRODUCT_DEPARTMENT (VARCHAR): Denormalized department.
+- PRODUCT_SKU (VARCHAR): Denormalized SKU.
+- PRODUCT_DISTRIBUTION_CENTER_ID (BIGINT): Distribution center. Joins to DISTRIBUTION_CENTERS.ID.
+
+## DISTRIBUTION_CENTERS — Warehouses products ship from.
+- ID (BIGINT): Unique distribution-center identifier.
+- NAME (VARCHAR): Distribution center name (city).
+- LATITUDE (DOUBLE): Latitude.
+- LONGITUDE (DOUBLE): Longitude.
+
+## USERS — One row per registered user.
+- ID (BIGINT): Unique user identifier.
+- FIRST_NAME (VARCHAR): First name.
+- LAST_NAME (VARCHAR): Last name.
+- EMAIL (VARCHAR): Email address.
+- AGE (BIGINT): Age in years.
+- GENDER (VARCHAR): Gender.
+- STATE (VARCHAR): State/region.
+- STREET_ADDRESS (VARCHAR): Street address.
+- POSTAL_CODE (VARCHAR): Postal code.
+- CITY (VARCHAR): City.
+- COUNTRY (VARCHAR): Country.
+- LATITUDE (DOUBLE): Latitude.
+- LONGITUDE (DOUBLE): Longitude.
+- TRAFFIC_SOURCE (VARCHAR): Acquisition channel (Search, Organic, Email, Display, Facebook).
+- CREATED_AT (TIMESTAMP): When the user registered.
+
+## EVENTS — One row per web event (clickstream). Large; not bundled in data/.
+- ID (NUMBER): Unique event identifier.
+- USER_ID (NUMBER): The user, if known. Joins to USERS.ID.
+- SEQUENCE_NUMBER (NUMBER): Order of the event within its session.
+- SESSION_ID (TEXT): Session identifier.
+- CREATED_AT (TIMESTAMP_NTZ): When the event occurred.
+- IP_ADDRESS (TEXT): IP address.
+- CITY (TEXT): City.
+- STATE (TEXT): State/region.
+- POSTAL_CODE (TEXT): Postal code.
+- BROWSER (TEXT): Browser.
+- TRAFFIC_SOURCE (TEXT): Traffic source for the session.
+- URI (TEXT): Page path.
+- EVENT_TYPE (TEXT): Event type (e.g. cart, purchase, product, department).
+
+## Joins
+- THELOOK_ECOMMERCE.ORDER_ITEMS.ORDER_ID = THELOOK_ECOMMERCE.ORDERS.ORDER_ID  ([many_to_one] Each order item belongs to one order.)
+- THELOOK_ECOMMERCE.ORDER_ITEMS.USER_ID = THELOOK_ECOMMERCE.USERS.ID  ([many_to_one] Each order item was bought by one user.)
+- THELOOK_ECOMMERCE.ORDER_ITEMS.PRODUCT_ID = THELOOK_ECOMMERCE.PRODUCTS.ID  ([many_to_one] Each order item is one product.)
+- THELOOK_ECOMMERCE.ORDER_ITEMS.INVENTORY_ITEM_ID = THELOOK_ECOMMERCE.INVENTORY_ITEMS.ID  ([many_to_one] Each order item is fulfilled by one inventory unit.)
+- THELOOK_ECOMMERCE.ORDERS.USER_ID = THELOOK_ECOMMERCE.USERS.ID  ([many_to_one] Each order was placed by one user.)
+- THELOOK_ECOMMERCE.INVENTORY_ITEMS.PRODUCT_ID = THELOOK_ECOMMERCE.PRODUCTS.ID  ([many_to_one] Each inventory unit is one product.)
+- THELOOK_ECOMMERCE.INVENTORY_ITEMS.PRODUCT_DISTRIBUTION_CENTER_ID = THELOOK_ECOMMERCE.DISTRIBUTION_CENTERS.ID  ([many_to_one] Each inventory unit ships from one distribution center.)
+- THELOOK_ECOMMERCE.PRODUCTS.DISTRIBUTION_CENTER_ID = THELOOK_ECOMMERCE.DISTRIBUTION_CENTERS.ID  ([many_to_one] Each product has a home distribution center.)
+- THELOOK_ECOMMERCE.EVENTS.USER_ID = THELOOK_ECOMMERCE.USERS.ID  ([many_to_one] Each web event belongs to one user (when known).)
+
+# Domain context
+
+## theLook e-commerce
+
+theLook is a synthetic online retailer: registered users place orders, each order contains one or more order items, items map to inventory and products, and products ship from distribution centers. Web events capture browsing.
+
+Global rules:
+- **Currency is USD.** All money columns (`SALE_PRICE`, `COST`, `RETAIL_PRICE`) are US dollars.
+- **Revenue** is the sum of `ORDER_ITEMS.SALE_PRICE` for items not cancelled and not returned. Cancelled and returned items do not count.
+- A **completed order** is an order whose `STATUS = 'Complete'`.
+- A **customer** is a user who has placed at least one order. A user who only browsed is not a customer.
+- Identity: users are keyed by `USERS.ID` (= `ORDERS.USER_ID` = `ORDER_ITEMS.USER_ID`).
+- **Return rate** is item-grain: returned items divided by all items, where an item is returned when `ORDER_ITEMS.RETURNED_AT` is not null (equivalently item `STATUS = 'Returned'`). Only use order-level returns when a question explicitly asks about orders.
+- Products are identified by `PRODUCTS.ID`; product names are not unique. Include the product id when reporting per-product results.
+- `USERS.STATE` is populated for users of every country; questions 'by state' cover all countries unless the question restricts to one.
+- Grain trap: revenue lives at the order-item level. Count orders with `COUNT(DISTINCT ORDER_ID)`, never `COUNT(*)` over order items.
+
+Domains: [sales](sales), [catalog](catalog), [fulfillment](fulfillment), [users](users), [web](web).
+
+## Sales
+
+Orders and the items inside them.
+
+- `ORDERS`: one row per order. `STATUS` moves through Processing, Shipped, Complete, Cancelled, Returned. `RETURNED_AT` is set when the order came back.
+- `ORDER_ITEMS`: one row per item sold; `SALE_PRICE` is the per-item revenue. This is the grain for revenue.
+
+Child: [measuring sales](sales/measuring).
+
+## Measuring sales
+
+Definitions used across the business:
+- **Revenue**: `SUM(SALE_PRICE)` over order items not cancelled and not returned.
+- **Average order value**: revenue divided by distinct orders.
+- **Return rate**: share of orders with a non-null `RETURNED_AT`.
+- **Total spend**: a customer's lifetime revenue (revenue grouped by user).
+
+## Catalog
+
+- `PRODUCTS`: the catalog. `RETAIL_PRICE` is list price, `COST` is unit cost; margin is the difference.
+- `INVENTORY_ITEMS`: individual physical units. Each order item is fulfilled by one inventory item. `SOLD_AT` marks when a unit was sold.
+
+## Fulfillment
+
+- `DISTRIBUTION_CENTERS`: the warehouses products ship from (with lat/long).
+- Shipping timeline lives on `ORDERS`/`ORDER_ITEMS`: `CREATED_AT` -> `SHIPPED_AT` -> `DELIVERED_AT`, and `RETURNED_AT` for returns.
+
+## Users
+
+`USERS`: one row per registered user, with demographics, location, and `TRAFFIC_SOURCE` (how they were acquired). A user becomes a **customer** once they place an order.
+
+## Web events
+
+`EVENTS`: one row per web event, grouped into sessions by `SESSION_ID` and ordered by `SEQUENCE_NUMBER`. `EVENT_TYPE` and `URI` describe the action. Note: the events table is large and is not bundled in this repo's `data/`; load it from the BigQuery public dataset if needed.
+
+# Metrics
+
+## Revenue (`revenue`)
+- Description: Total revenue: sum of order-item sale price for items not cancelled and not returned. USD.
+- Unit: USD
+- Also called: sales, gmv, total revenue
+
+## Orders (`orders`)
+- Description: Number of distinct orders.
+- Also called: order count, number of orders
+
+## Completed orders (`completed_orders`)
+- Description: Distinct orders with STATUS = 'Complete'.
+- Also called: complete orders
+
+## Average order value (`average_order_value`)
+- Description: Revenue divided by distinct orders. USD.
+- Unit: USD
+- Also called: AOV, average basket
+
+## Return rate (`return_rate`)
+- Description: Share of orders that were returned (non-null RETURNED_AT). Ratio between 0 and 1.
+- Unit: ratio
+- Also called: returns rate, % returned
+
+## Customers (`customers`)
+- Description: Distinct users who have placed at least one order.
+- Also called: buyers, number of customers
+
+## Customer total spend (`total_spend`)
+- Description: A customer's lifetime revenue: revenue grouped by USER_ID. USD.
+- Unit: USD
+- Also called: lifetime value, LTV, spend per customer
+
+# Metric implementations
+
+## `revenue`
+- Expression: SUM("SALE_PRICE")
+- Table: THELOOK_ECOMMERCE.ORDER_ITEMS
+- Filters: THELOOK_ECOMMERCE.ORDER_ITEMS.STATUS NOT IN ('Cancelled', 'Returned')
+
+## `orders`
+- Expression: COUNT(DISTINCT "ORDER_ID")
+- Table: THELOOK_ECOMMERCE.ORDERS
+- Filters: none
+
+## `completed_orders`
+- Expression: COUNT(DISTINCT "ORDER_ID")
+- Table: THELOOK_ECOMMERCE.ORDERS
+- Filters: THELOOK_ECOMMERCE.ORDERS.STATUS = 'Complete'
+
+## `average_order_value`
+- Expression: SUM("SALE_PRICE") / NULLIF(COUNT(DISTINCT "ORDER_ID"), 0)
+- Table: THELOOK_ECOMMERCE.ORDER_ITEMS
+- Filters: THELOOK_ECOMMERCE.ORDER_ITEMS.STATUS NOT IN ('Cancelled', 'Returned')
+
+## `return_rate`
+- Expression: COUNT(DISTINCT CASE WHEN "RETURNED_AT" IS NOT NULL THEN "ORDER_ID" END) * 1.0 / NULLIF(COUNT(DISTINCT "ORDER_ID"), 0)
+- Table: THELOOK_ECOMMERCE.ORDERS
+- Filters: none
+
+## `customers`
+- Expression: COUNT(DISTINCT "USER_ID")
+- Table: THELOOK_ECOMMERCE.ORDERS
+- Filters: none
+
+## `total_spend`
+- Expression: SUM("SALE_PRICE")
+- Table: THELOOK_ECOMMERCE.ORDER_ITEMS
+- Filters: THELOOK_ECOMMERCE.ORDER_ITEMS.STATUS NOT IN ('Cancelled', 'Returned')
+
+# Worked examples (library)
+
+## What is total revenue by product category, for the top 5 categories?
+
+```sql
+SELECT p.CATEGORY, SUM(oi.SALE_PRICE) AS revenue
+FROM ORDER_ITEMS oi
+JOIN PRODUCTS p ON oi.PRODUCT_ID = p.ID
+WHERE oi.STATUS NOT IN ('Cancelled', 'Returned')
+GROUP BY p.CATEGORY
+ORDER BY revenue DESC
+LIMIT 5
+```
+
+## Which are the top 5 brands by revenue, with their revenue?
+
+```sql
+SELECT p.BRAND, SUM(oi.SALE_PRICE) AS revenue
+FROM ORDER_ITEMS oi
+JOIN PRODUCTS p ON oi.PRODUCT_ID = p.ID
+WHERE oi.STATUS NOT IN ('Cancelled', 'Returned')
+GROUP BY p.BRAND
+ORDER BY revenue DESC
+LIMIT 5
+```
+
+## What is total revenue by product category, for the top 5 categories?
+
+```sql
+SELECT p.CATEGORY, SUM(oi.SALE_PRICE) AS revenue
+FROM ORDER_ITEMS oi
+JOIN PRODUCTS p ON oi.PRODUCT_ID = p.ID
+WHERE oi.STATUS NOT IN ('Cancelled', 'Returned')
+GROUP BY p.CATEGORY
+ORDER BY revenue DESC
+LIMIT 5
+```

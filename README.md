@@ -15,7 +15,7 @@ Every experiment directory ships:
 
 - `README.md` — design, how to reproduce the figures offline, and how to re-run
   the benchmark itself.
-- `ARTICLE.md` — the write-up, with its figures in `images/`.
+- `images/` — the write-up's figures, regenerable from the published data.
 - `results/runs/` — the published run files the write-up's numbers come from.
 - `requirements.txt` + self-testing modules in `src/`.
 

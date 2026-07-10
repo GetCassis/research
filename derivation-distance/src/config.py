@@ -20,43 +20,42 @@ PRICING = {
 
 # --- Derivation-distance axis (REALISTIC: discoverability is part of the task) ---
 # The context is the published ontology shown at increasing depth, and it is
-# IDENTICAL across all questions through L4 (the model must locate the relevant
-# tables / metrics / rules itself — we do NOT pre-select per-question facts).
-# Only L5/L6 are tailored, because a worked example / answer template is
-# inherently for one specific question. Completeness is therefore not hand-fed;
-# it is a property of the ontology, MEASURED per question against each question's
-# `required_facts` rubric (see docs) rather than injected.
+# IDENTICAL across all questions at every level (the model must locate the
+# relevant tables / metrics / rules itself — we do NOT pre-select per-question
+# facts). Completeness is therefore not hand-fed; it is a property of the
+# ontology, MEASURED per question against each question's `required_facts`
+# rubric (see docs) rather than injected.
 DERIVATION_LEVELS = [
-    "L1_schema_descriptions",    # schema names + descriptions + global dataset facts. Max derivation distance.
-    "L2_prose_rules",          # + domain context_md prose (rules, guardrails)
-    "L3_named_metrics",   # + named metric (entity + description, NO expression)
-    "L4_metric_formulas",    # + metric expression (= the canonical published ontology)
-    "L5_example_library",        # + the FULL worked-example library (model must find the relevant analogue)
-    "L6_answer_templates",        # + the FULL template library: a blanked gold query per question, shared, model finds its own
+    "descriptions",  # schema + column descriptions + global dataset facts. Max derivation distance.
+    "metrics",       # + domain prose, named metrics, and metric expressions (= the full published ontology)
+    "examples",      # + the FULL worked-example library (model must find the relevant analogue)
 ]
 # Side arm — NOT on the derivation axis. Bare schema names only (no descriptions,
 # no facts). Measures "can the model recover everything from column names alone?"
-SIDE_ARMS = ["L0_bare_schema"]
+SIDE_ARMS = ["bare_schema"]
 
-# Held-out (leave-one-out) library variants: for each question the library is built
-# from ALL OTHER questions, excluding its own bespoke entry — so the gallery was not
-# written for the question being asked (a more realistic "library covers a different
-# question set" condition). Run for comparison against the all-inclusive libraries.
-#   L5_library_heldout = worked-example library minus this question's own analogue
-#   L6_templates_heldout = template gallery minus this question's own (blanked) gold
-COMPARISON_LEVELS = ["L5_library_heldout", "L6_templates_heldout", "L5_relevant_3", "L5_irrelevant_3", "L5_relevant_3_question", "L5_relevant_3_goldsql"]
-# L5_relevant_3 / L5_irrelevant_3: ontology + a 3-example library of the most / least relevant
-# OTHER examples (by shared tables + SQL constructs). Same size, so comparing them
-# isolates specific table/pattern transfer from a generic "examples are present"
-# effect — does the held-out library inform the answer, or is its content noise?
+# Comparison arms, off the main axis:
+#   templates = the FULL template gallery (every question's gold SQL, one literal
+#     blanked, shared; model finds its own and fills the blank). Off-axis because
+#     it presumes the answers were written down ahead of time.
+#   *_heldout = leave-one-out: for each question the library is rebuilt from ALL
+#     OTHER questions, so the gallery was not written for the question being asked.
+#   relevant_3 / irrelevant_3: ontology + a 3-example library of the most / least
+#     relevant OTHER examples (by shared tables + SQL constructs). Same size, so
+#     comparing them isolates specific transfer from a generic "examples present"
+#     effect. relevant_3_question / relevant_3_goldsql select by question-text
+#     similarity (realistic retriever) / gold-SQL token overlap (upper bound).
+COMPARISON_LEVELS = ["templates", "examples_heldout", "templates_heldout",
+                     "relevant_3", "irrelevant_3",
+                     "relevant_3_question", "relevant_3_goldsql"]
 
 LEVELS = SIDE_ARMS + DERIVATION_LEVELS
 # The canonical published ontology corresponds to this level:
-ANCHOR_LEVEL = "L4_metric_formulas"
+ANCHOR_LEVEL = "metrics"
 
 # Genuinely GLOBAL facts the ontology does not carry (e.g. the snapshot date,
 # which previously lived only in the dataset README). Injected at every derivation
-# rung (L1+), IDENTICAL across all questions — not per-question tailoring.
+# rung (descriptions and above), IDENTICAL across all questions — not per-question tailoring.
 # The window-convention fact pins the house reading of "last N days" (lower-bounded
 # only) — an audit showed models split between open and closed upper bounds, and the
 # golds use the open reading.
