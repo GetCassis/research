@@ -35,6 +35,8 @@ DERIVATION_LEVELS = [
 SIDE_ARMS = ["bare_schema"]
 
 # Comparison arms, off the main axis:
+#   descriptions_plus_examples = the complete descriptions foundation + the
+#     full example library, with domain prose and metric definitions omitted.
 #   templates = the FULL template gallery (every question's gold SQL, one literal
 #     blanked, shared; model finds its own and fills the blank). Off-axis because
 #     it presumes the answers were written down ahead of time.
@@ -45,7 +47,8 @@ SIDE_ARMS = ["bare_schema"]
 #     comparing them isolates specific transfer from a generic "examples present"
 #     effect. relevant_3_question / relevant_3_goldsql select by question-text
 #     similarity (realistic retriever) / gold-SQL token overlap (upper bound).
-COMPARISON_LEVELS = ["templates", "examples_heldout", "templates_heldout",
+COMPARISON_LEVELS = ["descriptions_plus_examples", "templates",
+                     "examples_heldout", "templates_heldout",
                      "relevant_3", "irrelevant_3",
                      "relevant_3_question", "relevant_3_goldsql"]
 

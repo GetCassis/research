@@ -10,7 +10,7 @@ constants. Every script has an `if __name__ == "__main__"` self-test path.
 - `MODELS = {label: model_id}` and `PRICING = {label: {"in": usd_per_mtok, "out": usd_per_mtok}}`
 - `DERIVATION_LEVELS = [descriptions, metrics, examples]` — the axis
 - `SIDE_ARMS = [bare_schema]`; `LEVELS = SIDE_ARMS + DERIVATION_LEVELS`
-- `COMPARISON_LEVELS = [templates, examples_heldout, templates_heldout, relevant_3, irrelevant_3, relevant_3_question, relevant_3_goldsql]` — ablation arms
+- `COMPARISON_LEVELS = [descriptions_plus_examples, templates, examples_heldout, templates_heldout, relevant_3, irrelevant_3, relevant_3_question, relevant_3_goldsql]` — ablation arms
 - `ANCHOR_LEVEL = metrics` (the full published ontology)
 - `DATASET_FACTS` — genuinely global facts injected identically at every derivation
   rung (snapshot date, the "last N days" window rule)
@@ -43,7 +43,8 @@ List of question dicts: `id`, `dataset`, `question`, `difficulty` (`single_agg` 
   arms are per-question).
 - `available_levels(qrow)`; module self-test checks monotone token counts across
   descriptions→metrics, no rubric leakage, descriptions hides metric expressions
-  (metrics reveals them), shared bodies identical
+  (metrics reveals them), `descriptions_plus_examples` contains the complete
+  descriptions foundation + examples but no prose/metric sections, shared bodies identical
   across questions.
 
 ## `src/contexts.py`
@@ -82,7 +83,8 @@ Builds DBs, golds and the context cache before running.
 ## Analysis
 - `src/analyze.py --run NAME` — figures to `results/figures/` + `results/summary.md`.
 - `src/article_charts.py` — the six article figures to `images/`, from the
-  published run files (`main.jsonl`, `heldout.jsonl`, `relevance.jsonl`).
+  published run files (`main.jsonl`, `descriptions_plus_examples.jsonl`,
+  `heldout.jsonl`, `relevance.jsonl`).
 - `src/repeatability.py [run.jsonl]`, `src/flakiness_corr.py [run.jsonl]`,
   `src/cost.py`, `src/relevance.py` (similarity selectors for the 3-example arms).
 

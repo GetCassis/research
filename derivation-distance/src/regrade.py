@@ -25,7 +25,8 @@ RUNS = os.path.join(config.RESULTS_DIR, "runs") if hasattr(config, "RESULTS_DIR"
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "results", "runs")
 FA_DIR = os.path.join(os.path.dirname(RUNS), "failure_analysis")
 
-LEVELS = ["bare_schema", "descriptions", "metrics", "examples", "templates"]
+LEVELS = ["bare_schema", "descriptions", "metrics", "examples",
+          "descriptions_plus_examples", "templates"]
 MODELS = ["haiku", "sonnet", "opus"]
 PRESENTATION = {"output_columns_only", "output_rounding", "output_typing",
                 "output_label_id_vs_name", "output_scale"}

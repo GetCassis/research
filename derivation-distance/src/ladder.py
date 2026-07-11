@@ -18,8 +18,14 @@ differences along the axis are derivation distance, not missing information:
   templates      COMPARISON ARM: metrics + the FULL template gallery (every
                  question's gold SQL, one literal blanked to <???>; the model finds
                  its own and fills the blank). Off the axis because it presumes the
-                 answers were written down ahead of time. The other comparison arms
-                 (*_heldout, relevant_3*, irrelevant_3) are library ablations.
+                 answers were written down ahead of time.
+
+  descriptions_plus_examples
+                 COMPARISON ARM: the complete descriptions foundation + the FULL
+                 worked-example library, but no domain prose or metric sections.
+                 This isolates examples from the rules and metrics below them in
+                 the additive axis. The remaining comparison arms (*_heldout,
+                 relevant_3*, irrelevant_3) are library ablations.
 
 Only facts present in THIS dataset's ontology (plus the authored required facts)
 are emitted; nothing is invented.
@@ -235,7 +241,8 @@ def _template_library_section(ds, exclude_id=None):
 
 # Every level's BODY (everything except the question line) is now identical across
 # all questions in a dataset, so each is pre-rendered once per (dataset, level).
-SHARED_BODY_LEVELS = ["bare_schema", "descriptions", "metrics", "examples", "templates"]
+SHARED_BODY_LEVELS = ["bare_schema", "descriptions", "metrics", "examples",
+                      "descriptions_plus_examples", "templates"]
 
 
 def _body_sections(ds, qrow, level):
@@ -248,6 +255,15 @@ def _body_sections(ds, qrow, level):
         # bare schema: names only, NO facts. Deliberately incomplete.
         parts.append(_schema_section(ds, ontology, include_descriptions=False))
         return parts
+
+    if level == "descriptions_plus_examples":
+        # Off-axis ablation: preserve the complete descriptions foundation and
+        # add the same full example library as `examples`, while omitting the
+        # domain prose, named metrics, and metric implementations.
+        parts.append(_facts_section(ds, qrow))
+        parts.append(_schema_section(ds, ontology, include_descriptions=True))
+        parts.append(_example_library_section(ds))
+        return [p for p in parts if p]
 
     if level in ("examples", "templates", "examples_heldout", "templates_heldout",
                  "relevant_3", "irrelevant_3", "relevant_3_question", "relevant_3_goldsql"):
@@ -386,6 +402,16 @@ if __name__ == "__main__":
     print("OK: descriptions carries global facts, NOT per-question facts, and hides "
           "metric expressions; metrics reveals them")
 
+    # descriptions_plus_examples is descriptions + the shared example library,
+    # with none of the prose-rule or metric sections from the full ontology.
+    lean_examples = render(ds, qrow, "descriptions_plus_examples")
+    assert render_body(ds, qrow, "descriptions").rstrip() in lean_examples
+    assert "# Worked examples (library)" in lean_examples
+    assert "# Domain context" not in lean_examples
+    assert "# Metrics" not in lean_examples
+    assert "# Metric implementations" not in lean_examples
+    print("OK: descriptions_plus_examples retains descriptions + examples only")
+
     # Two different questions must share identical context at metrics (discoverability task).
     qs2 = [q for q in questions.load("jaffle-shop") if q["id"] != qrow["id"]]
     if qs2:
@@ -394,6 +420,9 @@ if __name__ == "__main__":
         b = "\n".join(l for l in other.splitlines() if not l.startswith("# Question") and l.strip() != qs2[0]["question"])
         assert a == b, "metrics context must be identical across questions (only the question line differs)"
         print("OK: metrics context identical across questions (only question text differs)")
+        assert render_body(ds, qrow, "descriptions_plus_examples") == \
+            render_body(ds, qs2[0], "descriptions_plus_examples"), \
+            "descriptions_plus_examples body must be shared across questions"
 
     # bare_schema side arm: names only, NO facts/descriptions.
     bare = render(ds, qrow, "bare_schema")

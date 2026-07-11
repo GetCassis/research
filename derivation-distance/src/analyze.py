@@ -35,9 +35,13 @@ DERIVATION_LEVELS = list(config.DERIVATION_LEVELS)
 # Side arm(s): bare schema with NO required facts (deliberately incomplete).
 # Reported SEPARATELY; never plotted as a point on the derivation-distance line.
 SIDE_ARMS = list(config.SIDE_ARMS)
-# Full set of levels that may appear in a run (side arms + derivation axis).
-LEVEL_ORDER = list(config.LEVELS)
+# Full set of levels that may appear in a run (side arms + derivation axis +
+# off-axis comparison arms). Comparison arms can appear in summary tables but
+# are never plotted on the derivation-distance line.
+COMPARISON_LEVELS = list(getattr(config, "COMPARISON_LEVELS", []))
+LEVEL_ORDER = list(config.LEVELS) + COMPARISON_LEVELS
 LEVEL_SHORT = {name: name.split("_")[0] for name in LEVEL_ORDER}  # first name component
+LEVEL_SHORT["descriptions_plus_examples"] = "desc+examples"
 
 # Baseline of the derivation axis (max derivation distance, still complete).
 BASELINE = DERIVATION_LEVELS[0]              # "descriptions"

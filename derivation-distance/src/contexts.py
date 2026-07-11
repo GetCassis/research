@@ -2,9 +2,9 @@
 
 The body of a context (everything except the leading question line) is identical
 across all questions in a dataset for `ladder.SHARED_BODY_LEVELS` (bare_schema,
-descriptions, metrics, examples, templates). We store that body once per
-(dataset, level). Per-question levels (the *_heldout and 3-example arms) are
-stored per (dataset, level, id).
+descriptions, metrics, examples, descriptions_plus_examples, templates). We
+store that body once per (dataset, level). Per-question levels (the *_heldout
+and 3-example arms) are stored per (dataset, level, id).
 
 `get(ds, qrow, level)` composes the question block with the cached body and is
 byte-for-byte equal to `ladder.render(ds, qrow, level)`. The benchmark uses

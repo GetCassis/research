@@ -21,10 +21,13 @@ relevant table / metric / rule itself, so discoverability is part of the task.
 | `descriptions` | schema + column descriptions + global operating facts (snapshot date, window rule) | axis — max distance |
 | `metrics` | + domain prose (rules, guardrails), named metrics, and metric expressions — the full published ontology | axis |
 | `examples` | + the **full worked-example library** (model finds the relevant analogue) | axis |
+| `descriptions_plus_examples` | complete descriptions foundation + the same example library, **without** domain prose or metric sections | comparison arm |
 | `templates` | + the **full template gallery**: every question's gold SQL with one literal blanked | comparison arm |
 
-Ablation variants (comparison arms): `examples_heldout` / `templates_heldout`
-(leave-one-out: the question's own entry removed), `relevant_3` /
+Ablation variants (comparison arms): `descriptions_plus_examples` isolates the
+example library from the rules and metrics below it in the additive axis;
+`examples_heldout` / `templates_heldout` (leave-one-out: the question's own
+entry removed), `relevant_3` /
 `irrelevant_3` (size-matched 3-example libraries picked by structural
 similarity), and `relevant_3_question` / `relevant_3_goldsql` (3 examples
 picked by question-text similarity / gold-SQL token overlap).
@@ -34,6 +37,24 @@ Every level's rendered context body is committed under
 `<level>/<question_id>.body.txt` for the per-question ablation arms — so you
 can inspect exactly what the models saw. A run prepends only a `# Question`
 block to these bodies.
+
+### Rules/metrics ablation result
+
+`descriptions_plus_examples` keeps completeness constant: the full operating
+facts and schema/column descriptions are retained byte-for-byte, then the
+example library is added. Only the domain-prose and metric sections are
+removed. A literal question-plus-examples context would be incomplete and is
+not tested.
+
+| Model | Standard: full examples → ablation | Hard: full examples → ablation |
+|---|---:|---:|
+| Haiku 4.5 | 94% → 94% | 82% → 81% |
+| Sonnet 4.6 | 100% → 100% | 93% → 89% |
+| Opus 4.8 | 100% → 100% | 99% → 98% |
+
+The ablation cuts mean context size by 30–32% and mean uncached query cost by
+28–29%. The observed accuracy differences are small and not statistically
+clear in this run (the smallest exact discordance p-value is 0.125).
 
 ## The measurement
 
@@ -77,8 +98,17 @@ export ANTHROPIC_API_KEY=...
 .venv/bin/python src/analyze.py --run myrun
 ```
 
+Run only the rules/metrics ablation with the published design:
+
+```bash
+.venv/bin/python src/run.py --run descriptions_plus_examples \
+    --datasets jaffle-shop thelook olist \
+    --levels descriptions_plus_examples --samples 3 --concurrency 8
+```
+
 Cost note: the main 2,484-cell grid (4 levels × 3 models × 69 questions × 3
-samples) cost about **$47** in API calls at mid-2026 prices.
+samples) cost about **$47** in API calls at mid-2026 prices. The additional
+621-cell `descriptions_plus_examples` arm cost **$14.54**.
 
 ## Layout
 

@@ -51,6 +51,7 @@ N = 3
 # All figures read runs on the convention-fixed contexts (tolerant grading
 # applied at run time): the article-level main axis plus the re-run ablations.
 RUN_FILE = "main.jsonl"
+LEAN_EXAMPLES_FILE = "descriptions_plus_examples.jsonl"
 ABLATION_BASE_FILE = "main.jsonl"
 LOO_FILE = "heldout.jsonl"
 REL_FILE = "relevance.jsonl"
@@ -156,9 +157,10 @@ def fig_repeatability(recs, outname):
 
 # -- Chart 06: cost vs accuracy (scatter with level labels) -------------------
 
-def fig_cost_accuracy(recs, tier, outname):
+def fig_cost_accuracy(recs, tier, outname, comparison_recs=None):
+    comparison_recs = comparison_recs or []
     g = defaultdict(list)
-    for r in recs:
+    for r in recs + comparison_recs:
         if tier and TIER.get(r["id"]) != tier:
             continue
         g[(r["model"], r["level"])].append(r)
@@ -180,10 +182,25 @@ def fig_cost_accuracy(recs, tier, outname):
             ax.annotate(lab, (x, y), fontsize=6.5, color=MODEL_COLOR[m],
                         xytext=(3, 3), textcoords="offset points")
 
+        lean_key = (m, "descriptions_plus_examples")
+        if lean_key in agg:
+            lean = agg[lean_key]
+            x, y = lean["cost"] * 1000, lean["acc"] * 100
+            ax.scatter([x], [y], marker="D", s=70, facecolors="none",
+                       edgecolors=MODEL_COLOR[m], linewidths=1.6, zorder=5)
+            ax.annotate("descriptions + examples", (x, y), fontsize=6.5,
+                        color=MODEL_COLOR[m], xytext=(4, -10),
+                        textcoords="offset points")
+
+    lean_proxy = plt.Line2D([], [], marker="D", markersize=7, markerfacecolor="none",
+                            markeredgecolor="#444444", linestyle="None",
+                            label="descriptions + examples (no rules/metrics)")
+
     ax.set_xlabel("cost per query (USD x1000)")
     ax.set_ylabel("execution accuracy (%)")
     ax.set_title(f"Accuracy vs cost, {tier} tier\nup-and-to-the-left is better value")
-    ax.legend(title="model", fontsize=9)
+    handles, _ = ax.get_legend_handles_labels()
+    ax.legend(handles=handles + [lean_proxy], title="model", fontsize=8)
     ax.grid(alpha=0.25)
     fig.tight_layout()
     out = os.path.join(IMG_DIR, outname)
@@ -311,10 +328,11 @@ def fig_relevance(outname):
 
 def main():
     recs = filter_levels(load(RUN_FILE))
+    lean_examples = load(LEAN_EXAMPLES_FILE)
     fig_accuracy_vs_level(recs, "standard", "01-standard-tier.png")
     fig_accuracy_vs_level(recs, "hard", "02-hard-tier-cliff.png")
     fig_repeatability(recs, "04-repeatability.png")
-    fig_cost_accuracy(recs, "hard", "06-cost-accuracy.png")
+    fig_cost_accuracy(recs, "hard", "06-cost-accuracy.png", lean_examples)
     fig_leave_one_out("07-leave-one-out.png")
     fig_relevance("08-relevance.png")
     print("done")
