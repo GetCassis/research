@@ -1,0 +1,22 @@
+{
+  "claude-haiku-5-5": {
+    "context_tokens": {
+      "none": 0.0,
+      "rule1": 27.0,
+      "rules": 106.0,
+      "ex1": 140.0,
+      "ex3": 371.0,
+      "ex5": 714.0,
+      "rules+ex5": 820.0
+    },
+    "prompt_tokens": {
+      "none": 308.2,
+      "rule1": 335.2,
+      "rules": 414.2,
+      "ex1": 448.2,
+      "ex3": 679.2,
+      "ex5": 1022.2,
+      "rules+ex5": 1128.2
+    }
+  }
+}

@@ -1,0 +1,5 @@
+anthropic==2.8.0
+matplotlib==3.11.0
+numpy==2.5.4
+pytest==9.2.0
+sqlglot==30.29.0

@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+.pytest_cache/
+# API response cache and spend ledger of a re-run (src/talkdemo/runners.py)
+cache/
+# everything the scripts write: new runs, report tables, white-box outputs and diagnostic figures
+out/

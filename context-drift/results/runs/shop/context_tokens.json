@@ -1,0 +1,46 @@
+{
+  "claude-haiku-5-5": {
+    "context_tokens": {
+      "none": 0.0,
+      "rule1": 27.0,
+      "rules": 138.0,
+      "ex1": 136.0,
+      "ex3": 359.0,
+      "ex5": 694.0,
+      "rule1+ex5": 721.0,
+      "rules+ex5": 832.0
+    },
+    "prompt_tokens": {
+      "none": 247.2,
+      "rule1": 274.2,
+      "rules": 385.2,
+      "ex1": 383.2,
+      "ex3": 606.2,
+      "ex5": 941.2,
+      "rule1+ex5": 968.2,
+      "rules+ex5": 1079.2
+    }
+  },
+  "claude-sonnet-5-5": {
+    "context_tokens": {
+      "none": 0.0,
+      "rule1": 27.0,
+      "rules": 138.0,
+      "ex1": 136.0,
+      "ex3": 359.0,
+      "ex5": 694.0,
+      "rule1+ex5": 721.0,
+      "rules+ex5": 832.0
+    },
+    "prompt_tokens": {
+      "none": 247.2,
+      "rule1": 274.2,
+      "rules": 385.2,
+      "ex1": 383.2,
+      "ex3": 606.2,
+      "ex5": 941.2,
+      "rule1+ex5": 968.2,
+      "rules+ex5": 1079.2
+    }
+  }
+}

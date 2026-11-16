@@ -8,6 +8,7 @@ the accompanying write-up.
 | Experiment | Question it answers |
 |---|---|
 | [`derivation-distance/`](derivation-distance/) | How much does spelling things out in the context (rules → metric formulas → worked examples) help an LLM write correct analytics SQL, and how does that interact with model capability? |
+| [`context-drift/`](context-drift/) | A convention written once as a rule or copied into every example: what do the copies carry, and what happens when they disagree? Behavioural runs on Claude and a white-box read of Gemma 4 12B (Cassis talk, Forward Data Conference 2026). |
 
 ## Conventions
 

@@ -1,0 +1,1483 @@
+{
+  "id": "shop_v1",
+  "title": "Shop warehouse: net revenue (first version, self-explanatory column names)",
+  "dialect": "postgres",
+  "schema": "CREATE TABLE customers (\n  customer_id bigint PRIMARY KEY,\n  segment     text,         -- 'consumer' or 'business'\n  signup_at   timestamptz\n);\nCREATE TABLE orders (\n  order_id       bigint PRIMARY KEY,\n  customer_id    bigint REFERENCES customers,\n  ordered_at     timestamptz,\n  status         text,      -- 'pending', 'completed' or 'cancelled'\n  amount_cents   bigint,\n  refunded_cents bigint,\n  is_test        boolean,\n  country        text       -- ISO code, e.g. 'FR'\n);",
+  "conventions": [
+    {
+      "id": "net_refunds",
+      "layer": "metric",
+      "description": "Net revenue subtracts refunds: amount_cents - refunded_cents.",
+      "rule": "Net revenue is the order amount minus refunds.",
+      "wrong_rule": "Net revenue is the order amount; refunds are not subtracted.",
+      "in_one_line_rule": true,
+      "corrupt_regex": [
+        [
+          "((?:\\w+\\.)?amount_cents) - (?:\\w+\\.)?refunded_cents",
+          "\\1"
+        ]
+      ]
+    },
+    {
+      "id": "completed_only",
+      "layer": "metric",
+      "description": "Only completed orders count: status = 'completed'.",
+      "rule": "Only completed orders count.",
+      "wrong_rule": "Orders count whatever their status.",
+      "in_one_line_rule": true,
+      "corrupt_regex": [
+        [
+          "(?:\\w+\\.)?status = 'completed' AND ",
+          ""
+        ],
+        [
+          "WHERE (?:\\w+\\.)?status = 'completed'\\n\\s*AND ",
+          "WHERE "
+        ],
+        [
+          "[ \\t]*WHERE (?:\\w+\\.)?status = 'completed'\\n",
+          ""
+        ],
+        [
+          "\\n[ \\t]*WHERE (?:\\w+\\.)?status = 'completed'(?=;|\\)|$)",
+          ""
+        ]
+      ]
+    },
+    {
+      "id": "exclude_test",
+      "layer": "metric",
+      "description": "Test orders are excluded: NOT is_test.",
+      "rule": "Test orders are excluded.",
+      "wrong_rule": "Test orders are included.",
+      "in_one_line_rule": false,
+      "corrupt_regex": [
+        [
+          " AND NOT (?:\\w+\\.)?is_test",
+          ""
+        ],
+        [
+          "WHERE NOT (?:\\w+\\.)?is_test\\n\\s*AND ",
+          "WHERE "
+        ],
+        [
+          "[ \\t]*WHERE NOT (?:\\w+\\.)?is_test\\n",
+          ""
+        ],
+        [
+          "\\n[ \\t]*WHERE NOT (?:\\w+\\.)?is_test(?=;|\\)|$)",
+          ""
+        ]
+      ]
+    },
+    {
+      "id": "currency_units",
+      "layer": "metric",
+      "description": "Amounts are reported in euros, not cents: / 100.0.",
+      "rule": "Amounts are reported in euros, not cents.",
+      "wrong_rule": "Amounts are reported in cents.",
+      "in_one_line_rule": false,
+      "corrupt_regex": [
+        [
+          " / 100\\.0",
+          ""
+        ]
+      ]
+    },
+    {
+      "id": "local_time",
+      "layer": "date",
+      "description": "Timestamps are stored in UTC; days, months and hours are in Paris time: ordered_at AT TIME ZONE 'Europe/Paris'.",
+      "rule": "Dates and times are in Paris time (timestamps are stored in UTC).",
+      "wrong_rule": "Dates and times are in UTC.",
+      "in_one_line_rule": false,
+      "corrupt_regex": [
+        [
+          "\\(((?:\\w+\\.)?ordered_at) AT TIME ZONE 'Europe/Paris'\\)",
+          "\\1"
+        ],
+        [
+          " AT TIME ZONE 'Europe/Paris'",
+          ""
+        ]
+      ]
+    },
+    {
+      "id": "pct_scale",
+      "layer": "output",
+      "description": "Ratios are reported as percentages (0 to 100), not fractions: 100.0 * ratio.",
+      "rule": "Ratios are reported as percentages (0 to 100).",
+      "wrong_rule": "Ratios are reported as fractions between 0 and 1.",
+      "in_one_line_rule": false,
+      "corrupt_regex": [
+        [
+          "100\\.0 \\* ",
+          "1.0 * "
+        ],
+        [
+          " AS (\\w+?)_pct",
+          " AS \\1"
+        ]
+      ]
+    },
+    {
+      "id": "pct_round",
+      "layer": "output",
+      "description": "Percentages are rounded to one decimal: ROUND(..., 1).",
+      "rule": "Percentages are rounded to one decimal.",
+      "wrong_rule": "Percentages are not rounded.",
+      "in_one_line_rule": false,
+      "corrupt_regex": [
+        [
+          "(?s)ROUND\\((.*), 1\\) AS",
+          "\\1 AS"
+        ]
+      ]
+    }
+  ],
+  "one_line_rule": "Net revenue = amount minus refunds, for completed orders.",
+  "one_line_wrong": {
+    "net_refunds": "Net revenue = amount (refunds are not subtracted), for completed orders.",
+    "completed_only": "Net revenue = amount minus refunds, for all orders whatever their status."
+  },
+  "default_examples": [
+    "ex_month",
+    "ex_country",
+    "ex_top_customers",
+    "ex_aov_segment",
+    "ex_growth"
+  ],
+  "examples": [
+    {
+      "id": "ex_month",
+      "question": "Net revenue per month.",
+      "sql": "SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+      "applies": [
+        "net_refunds",
+        "completed_only",
+        "exclude_test",
+        "currency_units",
+        "local_time"
+      ],
+      "corrupted": {
+        "net_refunds": "SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n       SUM(amount_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+        "completed_only": "SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE NOT is_test\nGROUP BY 1\nORDER BY 1;",
+        "exclude_test": "SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed'\nGROUP BY 1\nORDER BY 1;",
+        "currency_units": "SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n       SUM(amount_cents - refunded_cents) AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+        "local_time": "SELECT date_trunc('month', ordered_at) AS month,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;"
+      }
+    },
+    {
+      "id": "ex_country",
+      "question": "Net revenue by country.",
+      "sql": "SELECT country,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country\nORDER BY net_revenue DESC;",
+      "applies": [
+        "net_refunds",
+        "completed_only",
+        "exclude_test",
+        "currency_units"
+      ],
+      "corrupted": {
+        "net_refunds": "SELECT country,\n       SUM(amount_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country\nORDER BY net_revenue DESC;",
+        "completed_only": "SELECT country,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE NOT is_test\nGROUP BY country\nORDER BY net_revenue DESC;",
+        "exclude_test": "SELECT country,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed'\nGROUP BY country\nORDER BY net_revenue DESC;",
+        "currency_units": "SELECT country,\n       SUM(amount_cents - refunded_cents) AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country\nORDER BY net_revenue DESC;"
+      }
+    },
+    {
+      "id": "ex_top_customers",
+      "question": "Top 10 customers by net revenue.",
+      "sql": "SELECT customer_id,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY customer_id\nORDER BY net_revenue DESC\nLIMIT 10;",
+      "applies": [
+        "net_refunds",
+        "completed_only",
+        "exclude_test",
+        "currency_units"
+      ],
+      "corrupted": {
+        "net_refunds": "SELECT customer_id,\n       SUM(amount_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY customer_id\nORDER BY net_revenue DESC\nLIMIT 10;",
+        "completed_only": "SELECT customer_id,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE NOT is_test\nGROUP BY customer_id\nORDER BY net_revenue DESC\nLIMIT 10;",
+        "exclude_test": "SELECT customer_id,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed'\nGROUP BY customer_id\nORDER BY net_revenue DESC\nLIMIT 10;",
+        "currency_units": "SELECT customer_id,\n       SUM(amount_cents - refunded_cents) AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY customer_id\nORDER BY net_revenue DESC\nLIMIT 10;"
+      }
+    },
+    {
+      "id": "ex_aov_segment",
+      "question": "Average order value by customer segment.",
+      "sql": "SELECT c.segment,\n       SUM(o.amount_cents - o.refunded_cents) / 100.0 / COUNT(*) AS avg_order_value\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test\nGROUP BY c.segment;",
+      "applies": [
+        "net_refunds",
+        "completed_only",
+        "exclude_test",
+        "currency_units"
+      ],
+      "corrupted": {
+        "net_refunds": "SELECT c.segment,\n       SUM(o.amount_cents) / 100.0 / COUNT(*) AS avg_order_value\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test\nGROUP BY c.segment;",
+        "completed_only": "SELECT c.segment,\n       SUM(o.amount_cents - o.refunded_cents) / 100.0 / COUNT(*) AS avg_order_value\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE NOT o.is_test\nGROUP BY c.segment;",
+        "exclude_test": "SELECT c.segment,\n       SUM(o.amount_cents - o.refunded_cents) / 100.0 / COUNT(*) AS avg_order_value\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed'\nGROUP BY c.segment;",
+        "currency_units": "SELECT c.segment,\n       SUM(o.amount_cents - o.refunded_cents) / COUNT(*) AS avg_order_value\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test\nGROUP BY c.segment;"
+      }
+    },
+    {
+      "id": "ex_growth",
+      "question": "Month-over-month growth of net revenue.",
+      "sql": "SELECT month,\n       ROUND(100.0 * (net / LAG(net) OVER (ORDER BY month) - 1), 1) AS growth_pct\nFROM (SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n             SUM(amount_cents - refunded_cents) / 100.0 AS net\n      FROM orders\n      WHERE status = 'completed' AND NOT is_test\n      GROUP BY 1) AS monthly\nORDER BY month;",
+      "applies": [
+        "net_refunds",
+        "completed_only",
+        "exclude_test",
+        "currency_units",
+        "local_time",
+        "pct_scale",
+        "pct_round"
+      ],
+      "corrupted": {
+        "net_refunds": "SELECT month,\n       ROUND(100.0 * (net / LAG(net) OVER (ORDER BY month) - 1), 1) AS growth_pct\nFROM (SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n             SUM(amount_cents) / 100.0 AS net\n      FROM orders\n      WHERE status = 'completed' AND NOT is_test\n      GROUP BY 1) AS monthly\nORDER BY month;",
+        "completed_only": "SELECT month,\n       ROUND(100.0 * (net / LAG(net) OVER (ORDER BY month) - 1), 1) AS growth_pct\nFROM (SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n             SUM(amount_cents - refunded_cents) / 100.0 AS net\n      FROM orders\n      WHERE NOT is_test\n      GROUP BY 1) AS monthly\nORDER BY month;",
+        "exclude_test": "SELECT month,\n       ROUND(100.0 * (net / LAG(net) OVER (ORDER BY month) - 1), 1) AS growth_pct\nFROM (SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n             SUM(amount_cents - refunded_cents) / 100.0 AS net\n      FROM orders\n      WHERE status = 'completed'\n      GROUP BY 1) AS monthly\nORDER BY month;",
+        "currency_units": "SELECT month,\n       ROUND(100.0 * (net / LAG(net) OVER (ORDER BY month) - 1), 1) AS growth_pct\nFROM (SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n             SUM(amount_cents - refunded_cents) AS net\n      FROM orders\n      WHERE status = 'completed' AND NOT is_test\n      GROUP BY 1) AS monthly\nORDER BY month;",
+        "local_time": "SELECT month,\n       ROUND(100.0 * (net / LAG(net) OVER (ORDER BY month) - 1), 1) AS growth_pct\nFROM (SELECT date_trunc('month', ordered_at) AS month,\n             SUM(amount_cents - refunded_cents) / 100.0 AS net\n      FROM orders\n      WHERE status = 'completed' AND NOT is_test\n      GROUP BY 1) AS monthly\nORDER BY month;",
+        "pct_scale": "SELECT month,\n       ROUND(1.0 * (net / LAG(net) OVER (ORDER BY month) - 1), 1) AS growth\nFROM (SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n             SUM(amount_cents - refunded_cents) / 100.0 AS net\n      FROM orders\n      WHERE status = 'completed' AND NOT is_test\n      GROUP BY 1) AS monthly\nORDER BY month;",
+        "pct_round": "SELECT month,\n       100.0 * (net / LAG(net) OVER (ORDER BY month) - 1) AS growth_pct\nFROM (SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n             SUM(amount_cents - refunded_cents) / 100.0 AS net\n      FROM orders\n      WHERE status = 'completed' AND NOT is_test\n      GROUP BY 1) AS monthly\nORDER BY month;"
+      }
+    },
+    {
+      "id": "ex_orders_day",
+      "question": "Number of orders per day.",
+      "sql": "SELECT (ordered_at AT TIME ZONE 'Europe/Paris')::date AS day,\n       COUNT(*) AS orders\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+      "applies": [
+        "completed_only",
+        "exclude_test",
+        "local_time"
+      ],
+      "corrupted": {
+        "completed_only": "SELECT (ordered_at AT TIME ZONE 'Europe/Paris')::date AS day,\n       COUNT(*) AS orders\nFROM orders\nWHERE NOT is_test\nGROUP BY 1\nORDER BY 1;",
+        "exclude_test": "SELECT (ordered_at AT TIME ZONE 'Europe/Paris')::date AS day,\n       COUNT(*) AS orders\nFROM orders\nWHERE status = 'completed'\nGROUP BY 1\nORDER BY 1;",
+        "local_time": "SELECT ordered_at::date AS day,\n       COUNT(*) AS orders\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;"
+      }
+    },
+    {
+      "id": "ex_refund_rate_month",
+      "question": "Refund rate per month.",
+      "sql": "SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n       ROUND(100.0 * SUM(refunded_cents) / SUM(amount_cents), 1) AS refund_rate_pct\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+      "applies": [
+        "completed_only",
+        "exclude_test",
+        "local_time",
+        "pct_scale",
+        "pct_round"
+      ],
+      "corrupted": {
+        "completed_only": "SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n       ROUND(100.0 * SUM(refunded_cents) / SUM(amount_cents), 1) AS refund_rate_pct\nFROM orders\nWHERE NOT is_test\nGROUP BY 1\nORDER BY 1;",
+        "exclude_test": "SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n       ROUND(100.0 * SUM(refunded_cents) / SUM(amount_cents), 1) AS refund_rate_pct\nFROM orders\nWHERE status = 'completed'\nGROUP BY 1\nORDER BY 1;",
+        "local_time": "SELECT date_trunc('month', ordered_at) AS month,\n       ROUND(100.0 * SUM(refunded_cents) / SUM(amount_cents), 1) AS refund_rate_pct\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+        "pct_scale": "SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n       ROUND(1.0 * SUM(refunded_cents) / SUM(amount_cents), 1) AS refund_rate\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+        "pct_round": "SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n       100.0 * SUM(refunded_cents) / SUM(amount_cents) AS refund_rate_pct\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;"
+      }
+    },
+    {
+      "id": "ex_weekday",
+      "question": "Net revenue by day of the week.",
+      "sql": "SELECT EXTRACT(isodow FROM ordered_at AT TIME ZONE 'Europe/Paris') AS weekday,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+      "applies": [
+        "net_refunds",
+        "completed_only",
+        "exclude_test",
+        "currency_units",
+        "local_time"
+      ],
+      "corrupted": {
+        "net_refunds": "SELECT EXTRACT(isodow FROM ordered_at AT TIME ZONE 'Europe/Paris') AS weekday,\n       SUM(amount_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+        "completed_only": "SELECT EXTRACT(isodow FROM ordered_at AT TIME ZONE 'Europe/Paris') AS weekday,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE NOT is_test\nGROUP BY 1\nORDER BY 1;",
+        "exclude_test": "SELECT EXTRACT(isodow FROM ordered_at AT TIME ZONE 'Europe/Paris') AS weekday,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed'\nGROUP BY 1\nORDER BY 1;",
+        "currency_units": "SELECT EXTRACT(isodow FROM ordered_at AT TIME ZONE 'Europe/Paris') AS weekday,\n       SUM(amount_cents - refunded_cents) AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+        "local_time": "SELECT EXTRACT(isodow FROM ordered_at) AS weekday,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;"
+      }
+    },
+    {
+      "id": "ex_fr_since_2024",
+      "question": "Net revenue in France since 2024.",
+      "sql": "SELECT SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND country = 'FR'\n  AND ordered_at AT TIME ZONE 'Europe/Paris' >= '2024-01-01';",
+      "applies": [
+        "net_refunds",
+        "completed_only",
+        "exclude_test",
+        "currency_units",
+        "local_time"
+      ],
+      "corrupted": {
+        "net_refunds": "SELECT SUM(amount_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND country = 'FR'\n  AND ordered_at AT TIME ZONE 'Europe/Paris' >= '2024-01-01';",
+        "completed_only": "SELECT SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE NOT is_test\n  AND country = 'FR'\n  AND ordered_at AT TIME ZONE 'Europe/Paris' >= '2024-01-01';",
+        "exclude_test": "SELECT SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed'\n  AND country = 'FR'\n  AND ordered_at AT TIME ZONE 'Europe/Paris' >= '2024-01-01';",
+        "currency_units": "SELECT SUM(amount_cents - refunded_cents) AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND country = 'FR'\n  AND ordered_at AT TIME ZONE 'Europe/Paris' >= '2024-01-01';",
+        "local_time": "SELECT SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND country = 'FR'\n  AND ordered_at >= '2024-01-01';"
+      }
+    }
+  ],
+  "questions": [
+    {
+      "id": "q_year",
+      "question": "What was our net revenue in 2025?",
+      "sql": "SELECT SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+      "applies": [
+        "net_refunds",
+        "completed_only",
+        "exclude_test",
+        "currency_units",
+        "local_time"
+      ],
+      "corrupted": {
+        "net_refunds": "SELECT SUM(amount_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+        "completed_only": "SELECT SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+        "exclude_test": "SELECT SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed'\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+        "currency_units": "SELECT SUM(amount_cents - refunded_cents) AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+        "local_time": "SELECT SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at) = 2025;"
+      },
+      "kind": "far",
+      "near": null,
+      "nearest_example": "ex_month",
+      "similarity": {
+        "ex_month": 0.5,
+        "ex_country": 0.5,
+        "ex_top_customers": 0.333,
+        "ex_aov_segment": 0.0,
+        "ex_growth": 0.333
+      },
+      "decision_points": {
+        "net_refunds": {
+          "prefix": "SELECT SUM(amount_cents",
+          "follows": " - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+          "violates": ") / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+          "follows_head": " -",
+          "violates_head": ")"
+        },
+        "completed_only": {
+          "prefix": "SELECT SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE",
+          "follows": " status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+          "violates": " NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+          "follows_head": " status",
+          "violates_head": " NOT"
+        },
+        "exclude_test": {
+          "prefix": "SELECT SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed'",
+          "follows": " AND NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+          "violates": "\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+          "follows_head": " AND",
+          "violates_head": "\n  AND"
+        },
+        "currency_units": {
+          "prefix": "SELECT SUM(amount_cents - refunded_cents)",
+          "follows": " / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+          "violates": " AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+          "follows_head": " /",
+          "violates_head": " AS"
+        },
+        "local_time": {
+          "prefix": "SELECT SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at",
+          "follows": " AT TIME ZONE 'Europe/Paris') = 2025;",
+          "violates": ") = 2025;",
+          "follows_head": " AT",
+          "violates_head": ")"
+        }
+      }
+    },
+    {
+      "id": "q_hour",
+      "question": "Net revenue per hour of the day.",
+      "sql": "SELECT EXTRACT(hour FROM ordered_at AT TIME ZONE 'Europe/Paris') AS hour,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+      "applies": [
+        "net_refunds",
+        "completed_only",
+        "exclude_test",
+        "currency_units",
+        "local_time"
+      ],
+      "corrupted": {
+        "net_refunds": "SELECT EXTRACT(hour FROM ordered_at AT TIME ZONE 'Europe/Paris') AS hour,\n       SUM(amount_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+        "completed_only": "SELECT EXTRACT(hour FROM ordered_at AT TIME ZONE 'Europe/Paris') AS hour,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE NOT is_test\nGROUP BY 1\nORDER BY 1;",
+        "exclude_test": "SELECT EXTRACT(hour FROM ordered_at AT TIME ZONE 'Europe/Paris') AS hour,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed'\nGROUP BY 1\nORDER BY 1;",
+        "currency_units": "SELECT EXTRACT(hour FROM ordered_at AT TIME ZONE 'Europe/Paris') AS hour,\n       SUM(amount_cents - refunded_cents) AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+        "local_time": "SELECT EXTRACT(hour FROM ordered_at) AS hour,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;"
+      },
+      "kind": "far",
+      "near": null,
+      "nearest_example": "ex_month",
+      "similarity": {
+        "ex_month": 0.4,
+        "ex_country": 0.4,
+        "ex_top_customers": 0.286,
+        "ex_aov_segment": 0.0,
+        "ex_growth": 0.286
+      },
+      "decision_points": {
+        "net_refunds": {
+          "prefix": "SELECT EXTRACT(hour FROM ordered_at AT TIME ZONE 'Europe/Paris') AS hour,\n       SUM(amount_cents",
+          "follows": " - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "violates": ") / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "follows_head": " -",
+          "violates_head": ")"
+        },
+        "completed_only": {
+          "prefix": "SELECT EXTRACT(hour FROM ordered_at AT TIME ZONE 'Europe/Paris') AS hour,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE",
+          "follows": " status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "violates": " NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "follows_head": " status",
+          "violates_head": " NOT"
+        },
+        "exclude_test": {
+          "prefix": "SELECT EXTRACT(hour FROM ordered_at AT TIME ZONE 'Europe/Paris') AS hour,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed'",
+          "follows": " AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "violates": "\nGROUP BY 1\nORDER BY 1;",
+          "follows_head": " AND",
+          "violates_head": "\nGROUP"
+        },
+        "currency_units": {
+          "prefix": "SELECT EXTRACT(hour FROM ordered_at AT TIME ZONE 'Europe/Paris') AS hour,\n       SUM(amount_cents - refunded_cents)",
+          "follows": " / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "violates": " AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "follows_head": " /",
+          "violates_head": " AS"
+        },
+        "local_time": {
+          "prefix": "SELECT EXTRACT(hour FROM ordered_at",
+          "follows": " AT TIME ZONE 'Europe/Paris') AS hour,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "violates": ") AS hour,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "follows_head": " AT",
+          "violates_head": ")"
+        }
+      }
+    },
+    {
+      "id": "q_segment",
+      "question": "Net revenue by customer segment.",
+      "sql": "SELECT c.segment,\n       SUM(o.amount_cents - o.refunded_cents) / 100.0 AS net_revenue\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test\nGROUP BY c.segment;",
+      "applies": [
+        "net_refunds",
+        "completed_only",
+        "exclude_test",
+        "currency_units"
+      ],
+      "corrupted": {
+        "net_refunds": "SELECT c.segment,\n       SUM(o.amount_cents) / 100.0 AS net_revenue\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test\nGROUP BY c.segment;",
+        "completed_only": "SELECT c.segment,\n       SUM(o.amount_cents - o.refunded_cents) / 100.0 AS net_revenue\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE NOT o.is_test\nGROUP BY c.segment;",
+        "exclude_test": "SELECT c.segment,\n       SUM(o.amount_cents - o.refunded_cents) / 100.0 AS net_revenue\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed'\nGROUP BY c.segment;",
+        "currency_units": "SELECT c.segment,\n       SUM(o.amount_cents - o.refunded_cents) AS net_revenue\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test\nGROUP BY c.segment;"
+      },
+      "kind": "far",
+      "near": null,
+      "nearest_example": "ex_month",
+      "similarity": {
+        "ex_month": 0.4,
+        "ex_country": 0.4,
+        "ex_top_customers": 0.286,
+        "ex_aov_segment": 0.286,
+        "ex_growth": 0.286
+      },
+      "decision_points": {
+        "net_refunds": {
+          "prefix": "SELECT c.segment,\n       SUM(o.amount_cents",
+          "follows": " - o.refunded_cents) / 100.0 AS net_revenue\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test\nGROUP BY c.segment;",
+          "violates": ") / 100.0 AS net_revenue\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test\nGROUP BY c.segment;",
+          "follows_head": " -",
+          "violates_head": ")"
+        },
+        "completed_only": {
+          "prefix": "SELECT c.segment,\n       SUM(o.amount_cents - o.refunded_cents) / 100.0 AS net_revenue\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE",
+          "follows": " o.status = 'completed' AND NOT o.is_test\nGROUP BY c.segment;",
+          "violates": " NOT o.is_test\nGROUP BY c.segment;",
+          "follows_head": " o.status",
+          "violates_head": " NOT"
+        },
+        "exclude_test": {
+          "prefix": "SELECT c.segment,\n       SUM(o.amount_cents - o.refunded_cents) / 100.0 AS net_revenue\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed'",
+          "follows": " AND NOT o.is_test\nGROUP BY c.segment;",
+          "violates": "\nGROUP BY c.segment;",
+          "follows_head": " AND",
+          "violates_head": "\nGROUP"
+        },
+        "currency_units": {
+          "prefix": "SELECT c.segment,\n       SUM(o.amount_cents - o.refunded_cents)",
+          "follows": " / 100.0 AS net_revenue\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test\nGROUP BY c.segment;",
+          "violates": " AS net_revenue\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test\nGROUP BY c.segment;",
+          "follows_head": " /",
+          "violates_head": " AS"
+        }
+      }
+    },
+    {
+      "id": "q_best_days",
+      "question": "Which 5 days had the highest net revenue?",
+      "sql": "SELECT (ordered_at AT TIME ZONE 'Europe/Paris')::date AS day,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY net_revenue DESC\nLIMIT 5;",
+      "applies": [
+        "net_refunds",
+        "completed_only",
+        "exclude_test",
+        "currency_units",
+        "local_time"
+      ],
+      "corrupted": {
+        "net_refunds": "SELECT (ordered_at AT TIME ZONE 'Europe/Paris')::date AS day,\n       SUM(amount_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY net_revenue DESC\nLIMIT 5;",
+        "completed_only": "SELECT (ordered_at AT TIME ZONE 'Europe/Paris')::date AS day,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE NOT is_test\nGROUP BY 1\nORDER BY net_revenue DESC\nLIMIT 5;",
+        "exclude_test": "SELECT (ordered_at AT TIME ZONE 'Europe/Paris')::date AS day,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed'\nGROUP BY 1\nORDER BY net_revenue DESC\nLIMIT 5;",
+        "currency_units": "SELECT (ordered_at AT TIME ZONE 'Europe/Paris')::date AS day,\n       SUM(amount_cents - refunded_cents) AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY net_revenue DESC\nLIMIT 5;",
+        "local_time": "SELECT ordered_at::date AS day,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY net_revenue DESC\nLIMIT 5;"
+      },
+      "kind": "far",
+      "near": null,
+      "nearest_example": "ex_month",
+      "similarity": {
+        "ex_month": 0.333,
+        "ex_country": 0.333,
+        "ex_top_customers": 0.25,
+        "ex_aov_segment": 0.0,
+        "ex_growth": 0.25
+      },
+      "decision_points": {
+        "net_refunds": {
+          "prefix": "SELECT (ordered_at AT TIME ZONE 'Europe/Paris')::date AS day,\n       SUM(amount_cents",
+          "follows": " - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY net_revenue DESC\nLIMIT 5;",
+          "violates": ") / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY net_revenue DESC\nLIMIT 5;",
+          "follows_head": " -",
+          "violates_head": ")"
+        },
+        "completed_only": {
+          "prefix": "SELECT (ordered_at AT TIME ZONE 'Europe/Paris')::date AS day,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE",
+          "follows": " status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY net_revenue DESC\nLIMIT 5;",
+          "violates": " NOT is_test\nGROUP BY 1\nORDER BY net_revenue DESC\nLIMIT 5;",
+          "follows_head": " status",
+          "violates_head": " NOT"
+        },
+        "exclude_test": {
+          "prefix": "SELECT (ordered_at AT TIME ZONE 'Europe/Paris')::date AS day,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed'",
+          "follows": " AND NOT is_test\nGROUP BY 1\nORDER BY net_revenue DESC\nLIMIT 5;",
+          "violates": "\nGROUP BY 1\nORDER BY net_revenue DESC\nLIMIT 5;",
+          "follows_head": " AND",
+          "violates_head": "\nGROUP"
+        },
+        "currency_units": {
+          "prefix": "SELECT (ordered_at AT TIME ZONE 'Europe/Paris')::date AS day,\n       SUM(amount_cents - refunded_cents)",
+          "follows": " / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY net_revenue DESC\nLIMIT 5;",
+          "violates": " AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY net_revenue DESC\nLIMIT 5;",
+          "follows_head": " /",
+          "violates_head": " AS"
+        },
+        "local_time": {
+          "prefix": "SELECT",
+          "follows": " (ordered_at AT TIME ZONE 'Europe/Paris')::date AS day,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY net_revenue DESC\nLIMIT 5;",
+          "violates": " ordered_at::date AS day,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY net_revenue DESC\nLIMIT 5;",
+          "follows_head": " (ordered_at",
+          "violates_head": " ordered_at::date"
+        }
+      }
+    },
+    {
+      "id": "q_per_customer",
+      "question": "Average net revenue per customer.",
+      "sql": "SELECT SUM(amount_cents - refunded_cents) / 100.0 / COUNT(DISTINCT customer_id) AS net_revenue_per_customer\nFROM orders\nWHERE status = 'completed' AND NOT is_test;",
+      "applies": [
+        "net_refunds",
+        "completed_only",
+        "exclude_test",
+        "currency_units"
+      ],
+      "corrupted": {
+        "net_refunds": "SELECT SUM(amount_cents) / 100.0 / COUNT(DISTINCT customer_id) AS net_revenue_per_customer\nFROM orders\nWHERE status = 'completed' AND NOT is_test;",
+        "completed_only": "SELECT SUM(amount_cents - refunded_cents) / 100.0 / COUNT(DISTINCT customer_id) AS net_revenue_per_customer\nFROM orders\nWHERE NOT is_test;",
+        "exclude_test": "SELECT SUM(amount_cents - refunded_cents) / 100.0 / COUNT(DISTINCT customer_id) AS net_revenue_per_customer\nFROM orders\nWHERE status = 'completed';",
+        "currency_units": "SELECT SUM(amount_cents - refunded_cents) / COUNT(DISTINCT customer_id) AS net_revenue_per_customer\nFROM orders\nWHERE status = 'completed' AND NOT is_test;"
+      },
+      "kind": "far",
+      "near": null,
+      "nearest_example": "ex_month",
+      "similarity": {
+        "ex_month": 0.4,
+        "ex_country": 0.4,
+        "ex_top_customers": 0.286,
+        "ex_aov_segment": 0.286,
+        "ex_growth": 0.286
+      },
+      "decision_points": {
+        "net_refunds": {
+          "prefix": "SELECT SUM(amount_cents",
+          "follows": " - refunded_cents) / 100.0 / COUNT(DISTINCT customer_id) AS net_revenue_per_customer\nFROM orders\nWHERE status = 'completed' AND NOT is_test;",
+          "violates": ") / 100.0 / COUNT(DISTINCT customer_id) AS net_revenue_per_customer\nFROM orders\nWHERE status = 'completed' AND NOT is_test;",
+          "follows_head": " -",
+          "violates_head": ")"
+        },
+        "completed_only": {
+          "prefix": "SELECT SUM(amount_cents - refunded_cents) / 100.0 / COUNT(DISTINCT customer_id) AS net_revenue_per_customer\nFROM orders\nWHERE",
+          "follows": " status = 'completed' AND NOT is_test;",
+          "violates": " NOT is_test;",
+          "follows_head": " status",
+          "violates_head": " NOT"
+        },
+        "exclude_test": {
+          "prefix": "SELECT SUM(amount_cents - refunded_cents) / 100.0 / COUNT(DISTINCT customer_id) AS net_revenue_per_customer\nFROM orders\nWHERE status = 'completed'",
+          "follows": " AND NOT is_test;",
+          "violates": ";",
+          "follows_head": " AND",
+          "violates_head": ";"
+        },
+        "currency_units": {
+          "prefix": "SELECT SUM(amount_cents - refunded_cents) /",
+          "follows": " 100.0 / COUNT(DISTINCT customer_id) AS net_revenue_per_customer\nFROM orders\nWHERE status = 'completed' AND NOT is_test;",
+          "violates": " COUNT(DISTINCT customer_id) AS net_revenue_per_customer\nFROM orders\nWHERE status = 'completed' AND NOT is_test;",
+          "follows_head": " 100.0",
+          "violates_head": " COUNT(DISTINCT"
+        }
+      }
+    },
+    {
+      "id": "q_fr_business",
+      "question": "Net revenue from business customers in France.",
+      "sql": "SELECT SUM(o.amount_cents - o.refunded_cents) / 100.0 AS net_revenue\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test\n  AND c.segment = 'business' AND o.country = 'FR';",
+      "applies": [
+        "net_refunds",
+        "completed_only",
+        "exclude_test",
+        "currency_units"
+      ],
+      "corrupted": {
+        "net_refunds": "SELECT SUM(o.amount_cents) / 100.0 AS net_revenue\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test\n  AND c.segment = 'business' AND o.country = 'FR';",
+        "completed_only": "SELECT SUM(o.amount_cents - o.refunded_cents) / 100.0 AS net_revenue\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE NOT o.is_test\n  AND c.segment = 'business' AND o.country = 'FR';",
+        "exclude_test": "SELECT SUM(o.amount_cents - o.refunded_cents) / 100.0 AS net_revenue\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed'\n  AND c.segment = 'business' AND o.country = 'FR';",
+        "currency_units": "SELECT SUM(o.amount_cents - o.refunded_cents) AS net_revenue\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test\n  AND c.segment = 'business' AND o.country = 'FR';"
+      },
+      "kind": "far",
+      "near": null,
+      "nearest_example": "ex_top_customers",
+      "similarity": {
+        "ex_month": 0.333,
+        "ex_country": 0.333,
+        "ex_top_customers": 0.429,
+        "ex_aov_segment": 0.0,
+        "ex_growth": 0.25
+      },
+      "decision_points": {
+        "net_refunds": {
+          "prefix": "SELECT SUM(o.amount_cents",
+          "follows": " - o.refunded_cents) / 100.0 AS net_revenue\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test\n  AND c.segment = 'business' AND o.country = 'FR';",
+          "violates": ") / 100.0 AS net_revenue\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test\n  AND c.segment = 'business' AND o.country = 'FR';",
+          "follows_head": " -",
+          "violates_head": ")"
+        },
+        "completed_only": {
+          "prefix": "SELECT SUM(o.amount_cents - o.refunded_cents) / 100.0 AS net_revenue\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE",
+          "follows": " o.status = 'completed' AND NOT o.is_test\n  AND c.segment = 'business' AND o.country = 'FR';",
+          "violates": " NOT o.is_test\n  AND c.segment = 'business' AND o.country = 'FR';",
+          "follows_head": " o.status",
+          "violates_head": " NOT"
+        },
+        "exclude_test": {
+          "prefix": "SELECT SUM(o.amount_cents - o.refunded_cents) / 100.0 AS net_revenue\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed'",
+          "follows": " AND NOT o.is_test\n  AND c.segment = 'business' AND o.country = 'FR';",
+          "violates": "\n  AND c.segment = 'business' AND o.country = 'FR';",
+          "follows_head": " AND",
+          "violates_head": "\n  AND"
+        },
+        "currency_units": {
+          "prefix": "SELECT SUM(o.amount_cents - o.refunded_cents)",
+          "follows": " / 100.0 AS net_revenue\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test\n  AND c.segment = 'business' AND o.country = 'FR';",
+          "violates": " AS net_revenue\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test\n  AND c.segment = 'business' AND o.country = 'FR';",
+          "follows_head": " /",
+          "violates_head": " AS"
+        }
+      }
+    },
+    {
+      "id": "q_business_share",
+      "question": "What share of net revenue comes from business customers?",
+      "sql": "SELECT ROUND(100.0 * SUM(o.amount_cents - o.refunded_cents) FILTER (WHERE c.segment = 'business')\n             / SUM(o.amount_cents - o.refunded_cents), 1) AS business_share_pct\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test;",
+      "applies": [
+        "net_refunds",
+        "completed_only",
+        "exclude_test",
+        "pct_scale",
+        "pct_round"
+      ],
+      "corrupted": {
+        "net_refunds": "SELECT ROUND(100.0 * SUM(o.amount_cents) FILTER (WHERE c.segment = 'business')\n             / SUM(o.amount_cents), 1) AS business_share_pct\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test;",
+        "completed_only": "SELECT ROUND(100.0 * SUM(o.amount_cents - o.refunded_cents) FILTER (WHERE c.segment = 'business')\n             / SUM(o.amount_cents - o.refunded_cents), 1) AS business_share_pct\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE NOT o.is_test;",
+        "exclude_test": "SELECT ROUND(100.0 * SUM(o.amount_cents - o.refunded_cents) FILTER (WHERE c.segment = 'business')\n             / SUM(o.amount_cents - o.refunded_cents), 1) AS business_share_pct\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed';",
+        "pct_scale": "SELECT ROUND(1.0 * SUM(o.amount_cents - o.refunded_cents) FILTER (WHERE c.segment = 'business')\n             / SUM(o.amount_cents - o.refunded_cents), 1) AS business_share\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test;",
+        "pct_round": "SELECT 100.0 * SUM(o.amount_cents - o.refunded_cents) FILTER (WHERE c.segment = 'business')\n             / SUM(o.amount_cents - o.refunded_cents) AS business_share_pct\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test;"
+      },
+      "kind": "far",
+      "near": null,
+      "nearest_example": "ex_top_customers",
+      "similarity": {
+        "ex_month": 0.286,
+        "ex_country": 0.286,
+        "ex_top_customers": 0.375,
+        "ex_aov_segment": 0.0,
+        "ex_growth": 0.222
+      },
+      "decision_points": {
+        "net_refunds": {
+          "prefix": "SELECT ROUND(100.0 * SUM(o.amount_cents",
+          "follows": " - o.refunded_cents) FILTER (WHERE c.segment = 'business')\n             / SUM(o.amount_cents - o.refunded_cents), 1) AS business_share_pct\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test;",
+          "violates": ") FILTER (WHERE c.segment = 'business')\n             / SUM(o.amount_cents), 1) AS business_share_pct\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test;",
+          "follows_head": " -",
+          "violates_head": ")"
+        },
+        "completed_only": {
+          "prefix": "SELECT ROUND(100.0 * SUM(o.amount_cents - o.refunded_cents) FILTER (WHERE c.segment = 'business')\n             / SUM(o.amount_cents - o.refunded_cents), 1) AS business_share_pct\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE",
+          "follows": " o.status = 'completed' AND NOT o.is_test;",
+          "violates": " NOT o.is_test;",
+          "follows_head": " o.status",
+          "violates_head": " NOT"
+        },
+        "exclude_test": {
+          "prefix": "SELECT ROUND(100.0 * SUM(o.amount_cents - o.refunded_cents) FILTER (WHERE c.segment = 'business')\n             / SUM(o.amount_cents - o.refunded_cents), 1) AS business_share_pct\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed'",
+          "follows": " AND NOT o.is_test;",
+          "violates": ";",
+          "follows_head": " AND",
+          "violates_head": ";"
+        },
+        "pct_scale": {
+          "prefix": "SELECT ROUND(",
+          "follows": "100.0 * SUM(o.amount_cents - o.refunded_cents) FILTER (WHERE c.segment = 'business')\n             / SUM(o.amount_cents - o.refunded_cents), 1) AS business_share_pct\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test;",
+          "violates": "1.0 * SUM(o.amount_cents - o.refunded_cents) FILTER (WHERE c.segment = 'business')\n             / SUM(o.amount_cents - o.refunded_cents), 1) AS business_share\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test;",
+          "follows_head": "100.0",
+          "violates_head": "1.0"
+        },
+        "pct_round": {
+          "prefix": "SELECT",
+          "follows": " ROUND(100.0 * SUM(o.amount_cents - o.refunded_cents) FILTER (WHERE c.segment = 'business')\n             / SUM(o.amount_cents - o.refunded_cents), 1) AS business_share_pct\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test;",
+          "violates": " 100.0 * SUM(o.amount_cents - o.refunded_cents) FILTER (WHERE c.segment = 'business')\n             / SUM(o.amount_cents - o.refunded_cents) AS business_share_pct\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test;",
+          "follows_head": " ROUND(100.0",
+          "violates_head": " 100.0"
+        }
+      }
+    },
+    {
+      "id": "q_refund_rate",
+      "question": "Refund rate by country.",
+      "sql": "SELECT country,\n       ROUND(100.0 * SUM(refunded_cents) / SUM(amount_cents), 1) AS refund_rate_pct\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country;",
+      "applies": [
+        "completed_only",
+        "exclude_test",
+        "pct_scale",
+        "pct_round"
+      ],
+      "corrupted": {
+        "completed_only": "SELECT country,\n       ROUND(100.0 * SUM(refunded_cents) / SUM(amount_cents), 1) AS refund_rate_pct\nFROM orders\nWHERE NOT is_test\nGROUP BY country;",
+        "exclude_test": "SELECT country,\n       ROUND(100.0 * SUM(refunded_cents) / SUM(amount_cents), 1) AS refund_rate_pct\nFROM orders\nWHERE status = 'completed'\nGROUP BY country;",
+        "pct_scale": "SELECT country,\n       ROUND(1.0 * SUM(refunded_cents) / SUM(amount_cents), 1) AS refund_rate\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country;",
+        "pct_round": "SELECT country,\n       100.0 * SUM(refunded_cents) / SUM(amount_cents) AS refund_rate_pct\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country;"
+      },
+      "kind": "far",
+      "near": null,
+      "nearest_example": "ex_country",
+      "similarity": {
+        "ex_month": 0.0,
+        "ex_country": 0.2,
+        "ex_top_customers": 0.0,
+        "ex_aov_segment": 0.0,
+        "ex_growth": 0.0
+      },
+      "decision_points": {
+        "completed_only": {
+          "prefix": "SELECT country,\n       ROUND(100.0 * SUM(refunded_cents) / SUM(amount_cents), 1) AS refund_rate_pct\nFROM orders\nWHERE",
+          "follows": " status = 'completed' AND NOT is_test\nGROUP BY country;",
+          "violates": " NOT is_test\nGROUP BY country;",
+          "follows_head": " status",
+          "violates_head": " NOT"
+        },
+        "exclude_test": {
+          "prefix": "SELECT country,\n       ROUND(100.0 * SUM(refunded_cents) / SUM(amount_cents), 1) AS refund_rate_pct\nFROM orders\nWHERE status = 'completed'",
+          "follows": " AND NOT is_test\nGROUP BY country;",
+          "violates": "\nGROUP BY country;",
+          "follows_head": " AND",
+          "violates_head": "\nGROUP"
+        },
+        "pct_scale": {
+          "prefix": "SELECT country,\n       ROUND(",
+          "follows": "100.0 * SUM(refunded_cents) / SUM(amount_cents), 1) AS refund_rate_pct\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country;",
+          "violates": "1.0 * SUM(refunded_cents) / SUM(amount_cents), 1) AS refund_rate\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country;",
+          "follows_head": "100.0",
+          "violates_head": "1.0"
+        },
+        "pct_round": {
+          "prefix": "SELECT country,",
+          "follows": "\n       ROUND(100.0 * SUM(refunded_cents) / SUM(amount_cents), 1) AS refund_rate_pct\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country;",
+          "violates": "\n       100.0 * SUM(refunded_cents) / SUM(amount_cents) AS refund_rate_pct\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country;",
+          "follows_head": "\n       ROUND(100.0",
+          "violates_head": "\n       100.0"
+        }
+      }
+    },
+    {
+      "id": "q_orders_week",
+      "question": "Number of orders per week.",
+      "sql": "SELECT date_trunc('week', ordered_at AT TIME ZONE 'Europe/Paris') AS week,\n       COUNT(*) AS orders\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+      "applies": [
+        "completed_only",
+        "exclude_test",
+        "local_time"
+      ],
+      "corrupted": {
+        "completed_only": "SELECT date_trunc('week', ordered_at AT TIME ZONE 'Europe/Paris') AS week,\n       COUNT(*) AS orders\nFROM orders\nWHERE NOT is_test\nGROUP BY 1\nORDER BY 1;",
+        "exclude_test": "SELECT date_trunc('week', ordered_at AT TIME ZONE 'Europe/Paris') AS week,\n       COUNT(*) AS orders\nFROM orders\nWHERE status = 'completed'\nGROUP BY 1\nORDER BY 1;",
+        "local_time": "SELECT date_trunc('week', ordered_at) AS week,\n       COUNT(*) AS orders\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;"
+      },
+      "kind": "far",
+      "near": null,
+      "nearest_example": "ex_month",
+      "similarity": {
+        "ex_month": 0.0,
+        "ex_country": 0.0,
+        "ex_top_customers": 0.0,
+        "ex_aov_segment": 0.0,
+        "ex_growth": 0.0
+      },
+      "decision_points": {
+        "completed_only": {
+          "prefix": "SELECT date_trunc('week', ordered_at AT TIME ZONE 'Europe/Paris') AS week,\n       COUNT(*) AS orders\nFROM orders\nWHERE",
+          "follows": " status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "violates": " NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "follows_head": " status",
+          "violates_head": " NOT"
+        },
+        "exclude_test": {
+          "prefix": "SELECT date_trunc('week', ordered_at AT TIME ZONE 'Europe/Paris') AS week,\n       COUNT(*) AS orders\nFROM orders\nWHERE status = 'completed'",
+          "follows": " AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "violates": "\nGROUP BY 1\nORDER BY 1;",
+          "follows_head": " AND",
+          "violates_head": "\nGROUP"
+        },
+        "local_time": {
+          "prefix": "SELECT date_trunc('week', ordered_at",
+          "follows": " AT TIME ZONE 'Europe/Paris') AS week,\n       COUNT(*) AS orders\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "violates": ") AS week,\n       COUNT(*) AS orders\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "follows_head": " AT",
+          "violates_head": ")"
+        }
+      }
+    },
+    {
+      "id": "q_business_orders",
+      "question": "What proportion of orders come from business customers?",
+      "sql": "SELECT ROUND(100.0 * COUNT(*) FILTER (WHERE c.segment = 'business') / COUNT(*), 1) AS business_orders_pct\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test;",
+      "applies": [
+        "completed_only",
+        "exclude_test",
+        "pct_scale",
+        "pct_round"
+      ],
+      "corrupted": {
+        "completed_only": "SELECT ROUND(100.0 * COUNT(*) FILTER (WHERE c.segment = 'business') / COUNT(*), 1) AS business_orders_pct\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE NOT o.is_test;",
+        "exclude_test": "SELECT ROUND(100.0 * COUNT(*) FILTER (WHERE c.segment = 'business') / COUNT(*), 1) AS business_orders_pct\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed';",
+        "pct_scale": "SELECT ROUND(1.0 * COUNT(*) FILTER (WHERE c.segment = 'business') / COUNT(*), 1) AS business_orders\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test;",
+        "pct_round": "SELECT 100.0 * COUNT(*) FILTER (WHERE c.segment = 'business') / COUNT(*) AS business_orders_pct\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test;"
+      },
+      "kind": "far",
+      "near": null,
+      "nearest_example": "ex_top_customers",
+      "similarity": {
+        "ex_month": 0.0,
+        "ex_country": 0.0,
+        "ex_top_customers": 0.111,
+        "ex_aov_segment": 0.0,
+        "ex_growth": 0.0
+      },
+      "decision_points": {
+        "completed_only": {
+          "prefix": "SELECT ROUND(100.0 * COUNT(*) FILTER (WHERE c.segment = 'business') / COUNT(*), 1) AS business_orders_pct\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE",
+          "follows": " o.status = 'completed' AND NOT o.is_test;",
+          "violates": " NOT o.is_test;",
+          "follows_head": " o.status",
+          "violates_head": " NOT"
+        },
+        "exclude_test": {
+          "prefix": "SELECT ROUND(100.0 * COUNT(*) FILTER (WHERE c.segment = 'business') / COUNT(*), 1) AS business_orders_pct\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed'",
+          "follows": " AND NOT o.is_test;",
+          "violates": ";",
+          "follows_head": " AND",
+          "violates_head": ";"
+        },
+        "pct_scale": {
+          "prefix": "SELECT ROUND(",
+          "follows": "100.0 * COUNT(*) FILTER (WHERE c.segment = 'business') / COUNT(*), 1) AS business_orders_pct\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test;",
+          "violates": "1.0 * COUNT(*) FILTER (WHERE c.segment = 'business') / COUNT(*), 1) AS business_orders\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test;",
+          "follows_head": "100.0",
+          "violates_head": "1.0"
+        },
+        "pct_round": {
+          "prefix": "SELECT",
+          "follows": " ROUND(100.0 * COUNT(*) FILTER (WHERE c.segment = 'business') / COUNT(*), 1) AS business_orders_pct\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test;",
+          "violates": " 100.0 * COUNT(*) FILTER (WHERE c.segment = 'business') / COUNT(*) AS business_orders_pct\nFROM orders o\nJOIN customers c ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND NOT o.is_test;",
+          "follows_head": " ROUND(100.0",
+          "violates_head": " 100.0"
+        }
+      }
+    },
+    {
+      "id": "q_aov_month",
+      "question": "Average order value per month.",
+      "sql": "SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n       SUM(amount_cents - refunded_cents) / 100.0 / COUNT(*) AS avg_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+      "applies": [
+        "net_refunds",
+        "completed_only",
+        "exclude_test",
+        "currency_units",
+        "local_time"
+      ],
+      "corrupted": {
+        "net_refunds": "SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n       SUM(amount_cents) / 100.0 / COUNT(*) AS avg_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+        "completed_only": "SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n       SUM(amount_cents - refunded_cents) / 100.0 / COUNT(*) AS avg_order_value\nFROM orders\nWHERE NOT is_test\nGROUP BY 1\nORDER BY 1;",
+        "exclude_test": "SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n       SUM(amount_cents - refunded_cents) / 100.0 / COUNT(*) AS avg_order_value\nFROM orders\nWHERE status = 'completed'\nGROUP BY 1\nORDER BY 1;",
+        "currency_units": "SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n       SUM(amount_cents - refunded_cents) / COUNT(*) AS avg_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+        "local_time": "SELECT date_trunc('month', ordered_at) AS month,\n       SUM(amount_cents - refunded_cents) / 100.0 / COUNT(*) AS avg_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;"
+      },
+      "kind": "far",
+      "near": null,
+      "nearest_example": "ex_aov_segment",
+      "similarity": {
+        "ex_month": 0.167,
+        "ex_country": 0.0,
+        "ex_top_customers": 0.0,
+        "ex_aov_segment": 0.5,
+        "ex_growth": 0.125
+      },
+      "decision_points": {
+        "net_refunds": {
+          "prefix": "SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n       SUM(amount_cents",
+          "follows": " - refunded_cents) / 100.0 / COUNT(*) AS avg_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "violates": ") / 100.0 / COUNT(*) AS avg_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "follows_head": " -",
+          "violates_head": ")"
+        },
+        "completed_only": {
+          "prefix": "SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n       SUM(amount_cents - refunded_cents) / 100.0 / COUNT(*) AS avg_order_value\nFROM orders\nWHERE",
+          "follows": " status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "violates": " NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "follows_head": " status",
+          "violates_head": " NOT"
+        },
+        "exclude_test": {
+          "prefix": "SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n       SUM(amount_cents - refunded_cents) / 100.0 / COUNT(*) AS avg_order_value\nFROM orders\nWHERE status = 'completed'",
+          "follows": " AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "violates": "\nGROUP BY 1\nORDER BY 1;",
+          "follows_head": " AND",
+          "violates_head": "\nGROUP"
+        },
+        "currency_units": {
+          "prefix": "SELECT date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') AS month,\n       SUM(amount_cents - refunded_cents) /",
+          "follows": " 100.0 / COUNT(*) AS avg_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "violates": " COUNT(*) AS avg_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "follows_head": " 100.0",
+          "violates_head": " COUNT(*)"
+        },
+        "local_time": {
+          "prefix": "SELECT date_trunc('month', ordered_at",
+          "follows": " AT TIME ZONE 'Europe/Paris') AS month,\n       SUM(amount_cents - refunded_cents) / 100.0 / COUNT(*) AS avg_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "violates": ") AS month,\n       SUM(amount_cents - refunded_cents) / 100.0 / COUNT(*) AS avg_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "follows_head": " AT",
+          "violates_head": ")"
+        }
+      }
+    },
+    {
+      "id": "q_median",
+      "question": "Median order value.",
+      "sql": "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY (amount_cents - refunded_cents) / 100.0) AS median_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test;",
+      "applies": [
+        "net_refunds",
+        "completed_only",
+        "exclude_test",
+        "currency_units"
+      ],
+      "corrupted": {
+        "net_refunds": "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY (amount_cents) / 100.0) AS median_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test;",
+        "completed_only": "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY (amount_cents - refunded_cents) / 100.0) AS median_order_value\nFROM orders\nWHERE NOT is_test;",
+        "exclude_test": "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY (amount_cents - refunded_cents) / 100.0) AS median_order_value\nFROM orders\nWHERE status = 'completed';",
+        "currency_units": "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY (amount_cents - refunded_cents)) AS median_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test;"
+      },
+      "kind": "far",
+      "near": null,
+      "nearest_example": "ex_aov_segment",
+      "similarity": {
+        "ex_month": 0.0,
+        "ex_country": 0.0,
+        "ex_top_customers": 0.0,
+        "ex_aov_segment": 0.333,
+        "ex_growth": 0.0
+      },
+      "decision_points": {
+        "net_refunds": {
+          "prefix": "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY (amount_cents",
+          "follows": " - refunded_cents) / 100.0) AS median_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test;",
+          "violates": ") / 100.0) AS median_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test;",
+          "follows_head": " -",
+          "violates_head": ")"
+        },
+        "completed_only": {
+          "prefix": "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY (amount_cents - refunded_cents) / 100.0) AS median_order_value\nFROM orders\nWHERE",
+          "follows": " status = 'completed' AND NOT is_test;",
+          "violates": " NOT is_test;",
+          "follows_head": " status",
+          "violates_head": " NOT"
+        },
+        "exclude_test": {
+          "prefix": "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY (amount_cents - refunded_cents) / 100.0) AS median_order_value\nFROM orders\nWHERE status = 'completed'",
+          "follows": " AND NOT is_test;",
+          "violates": ";",
+          "follows_head": " AND",
+          "violates_head": ";"
+        },
+        "currency_units": {
+          "prefix": "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY (amount_cents - refunded_cents)",
+          "follows": " / 100.0) AS median_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test;",
+          "violates": ") AS median_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test;",
+          "follows_head": " /",
+          "violates_head": ")"
+        }
+      }
+    },
+    {
+      "id": "q_december_share",
+      "question": "What share of 2025 net revenue was made in December?",
+      "sql": "SELECT ROUND(100.0 * SUM(amount_cents - refunded_cents)\n               FILTER (WHERE EXTRACT(month FROM ordered_at AT TIME ZONE 'Europe/Paris') = 12)\n             / SUM(amount_cents - refunded_cents), 1) AS december_share_pct\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+      "applies": [
+        "net_refunds",
+        "completed_only",
+        "exclude_test",
+        "local_time",
+        "pct_scale",
+        "pct_round"
+      ],
+      "corrupted": {
+        "net_refunds": "SELECT ROUND(100.0 * SUM(amount_cents)\n               FILTER (WHERE EXTRACT(month FROM ordered_at AT TIME ZONE 'Europe/Paris') = 12)\n             / SUM(amount_cents), 1) AS december_share_pct\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+        "completed_only": "SELECT ROUND(100.0 * SUM(amount_cents - refunded_cents)\n               FILTER (WHERE EXTRACT(month FROM ordered_at AT TIME ZONE 'Europe/Paris') = 12)\n             / SUM(amount_cents - refunded_cents), 1) AS december_share_pct\nFROM orders\nWHERE NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+        "exclude_test": "SELECT ROUND(100.0 * SUM(amount_cents - refunded_cents)\n               FILTER (WHERE EXTRACT(month FROM ordered_at AT TIME ZONE 'Europe/Paris') = 12)\n             / SUM(amount_cents - refunded_cents), 1) AS december_share_pct\nFROM orders\nWHERE status = 'completed'\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+        "local_time": "SELECT ROUND(100.0 * SUM(amount_cents - refunded_cents)\n               FILTER (WHERE EXTRACT(month FROM ordered_at) = 12)\n             / SUM(amount_cents - refunded_cents), 1) AS december_share_pct\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at) = 2025;",
+        "pct_scale": "SELECT ROUND(1.0 * SUM(amount_cents - refunded_cents)\n               FILTER (WHERE EXTRACT(month FROM ordered_at AT TIME ZONE 'Europe/Paris') = 12)\n             / SUM(amount_cents - refunded_cents), 1) AS december_share\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+        "pct_round": "SELECT 100.0 * SUM(amount_cents - refunded_cents)\n               FILTER (WHERE EXTRACT(month FROM ordered_at AT TIME ZONE 'Europe/Paris') = 12)\n             / SUM(amount_cents - refunded_cents) AS december_share_pct\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;"
+      },
+      "kind": "far",
+      "near": null,
+      "nearest_example": "ex_month",
+      "similarity": {
+        "ex_month": 0.286,
+        "ex_country": 0.286,
+        "ex_top_customers": 0.222,
+        "ex_aov_segment": 0.0,
+        "ex_growth": 0.222
+      },
+      "decision_points": {
+        "net_refunds": {
+          "prefix": "SELECT ROUND(100.0 * SUM(amount_cents",
+          "follows": " - refunded_cents)\n               FILTER (WHERE EXTRACT(month FROM ordered_at AT TIME ZONE 'Europe/Paris') = 12)\n             / SUM(amount_cents - refunded_cents), 1) AS december_share_pct\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+          "violates": ")\n               FILTER (WHERE EXTRACT(month FROM ordered_at AT TIME ZONE 'Europe/Paris') = 12)\n             / SUM(amount_cents), 1) AS december_share_pct\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+          "follows_head": " -",
+          "violates_head": ")"
+        },
+        "completed_only": {
+          "prefix": "SELECT ROUND(100.0 * SUM(amount_cents - refunded_cents)\n               FILTER (WHERE EXTRACT(month FROM ordered_at AT TIME ZONE 'Europe/Paris') = 12)\n             / SUM(amount_cents - refunded_cents), 1) AS december_share_pct\nFROM orders\nWHERE",
+          "follows": " status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+          "violates": " NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+          "follows_head": " status",
+          "violates_head": " NOT"
+        },
+        "exclude_test": {
+          "prefix": "SELECT ROUND(100.0 * SUM(amount_cents - refunded_cents)\n               FILTER (WHERE EXTRACT(month FROM ordered_at AT TIME ZONE 'Europe/Paris') = 12)\n             / SUM(amount_cents - refunded_cents), 1) AS december_share_pct\nFROM orders\nWHERE status = 'completed'",
+          "follows": " AND NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+          "violates": "\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+          "follows_head": " AND",
+          "violates_head": "\n  AND"
+        },
+        "local_time": {
+          "prefix": "SELECT ROUND(100.0 * SUM(amount_cents - refunded_cents)\n               FILTER (WHERE EXTRACT(month FROM ordered_at",
+          "follows": " AT TIME ZONE 'Europe/Paris') = 12)\n             / SUM(amount_cents - refunded_cents), 1) AS december_share_pct\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+          "violates": ") = 12)\n             / SUM(amount_cents - refunded_cents), 1) AS december_share_pct\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at) = 2025;",
+          "follows_head": " AT",
+          "violates_head": ")"
+        },
+        "pct_scale": {
+          "prefix": "SELECT ROUND(",
+          "follows": "100.0 * SUM(amount_cents - refunded_cents)\n               FILTER (WHERE EXTRACT(month FROM ordered_at AT TIME ZONE 'Europe/Paris') = 12)\n             / SUM(amount_cents - refunded_cents), 1) AS december_share_pct\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+          "violates": "1.0 * SUM(amount_cents - refunded_cents)\n               FILTER (WHERE EXTRACT(month FROM ordered_at AT TIME ZONE 'Europe/Paris') = 12)\n             / SUM(amount_cents - refunded_cents), 1) AS december_share\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+          "follows_head": "100.0",
+          "violates_head": "1.0"
+        },
+        "pct_round": {
+          "prefix": "SELECT",
+          "follows": " ROUND(100.0 * SUM(amount_cents - refunded_cents)\n               FILTER (WHERE EXTRACT(month FROM ordered_at AT TIME ZONE 'Europe/Paris') = 12)\n             / SUM(amount_cents - refunded_cents), 1) AS december_share_pct\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+          "violates": " 100.0 * SUM(amount_cents - refunded_cents)\n               FILTER (WHERE EXTRACT(month FROM ordered_at AT TIME ZONE 'Europe/Paris') = 12)\n             / SUM(amount_cents - refunded_cents) AS december_share_pct\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND EXTRACT(year FROM ordered_at AT TIME ZONE 'Europe/Paris') = 2025;",
+          "follows_head": " ROUND(100.0",
+          "violates_head": " 100.0"
+        }
+      }
+    },
+    {
+      "id": "q_customers_march",
+      "question": "How many customers placed an order in March 2025?",
+      "sql": "SELECT COUNT(DISTINCT customer_id) AS customers\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') = '2025-03-01';",
+      "applies": [
+        "completed_only",
+        "exclude_test",
+        "local_time"
+      ],
+      "corrupted": {
+        "completed_only": "SELECT COUNT(DISTINCT customer_id) AS customers\nFROM orders\nWHERE NOT is_test\n  AND date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') = '2025-03-01';",
+        "exclude_test": "SELECT COUNT(DISTINCT customer_id) AS customers\nFROM orders\nWHERE status = 'completed'\n  AND date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') = '2025-03-01';",
+        "local_time": "SELECT COUNT(DISTINCT customer_id) AS customers\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND date_trunc('month', ordered_at) = '2025-03-01';"
+      },
+      "kind": "far",
+      "near": null,
+      "nearest_example": "ex_top_customers",
+      "similarity": {
+        "ex_month": 0.0,
+        "ex_country": 0.0,
+        "ex_top_customers": 0.111,
+        "ex_aov_segment": 0.111,
+        "ex_growth": 0.0
+      },
+      "decision_points": {
+        "completed_only": {
+          "prefix": "SELECT COUNT(DISTINCT customer_id) AS customers\nFROM orders\nWHERE",
+          "follows": " status = 'completed' AND NOT is_test\n  AND date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') = '2025-03-01';",
+          "violates": " NOT is_test\n  AND date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') = '2025-03-01';",
+          "follows_head": " status",
+          "violates_head": " NOT"
+        },
+        "exclude_test": {
+          "prefix": "SELECT COUNT(DISTINCT customer_id) AS customers\nFROM orders\nWHERE status = 'completed'",
+          "follows": " AND NOT is_test\n  AND date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') = '2025-03-01';",
+          "violates": "\n  AND date_trunc('month', ordered_at AT TIME ZONE 'Europe/Paris') = '2025-03-01';",
+          "follows_head": " AND",
+          "violates_head": "\n  AND"
+        },
+        "local_time": {
+          "prefix": "SELECT COUNT(DISTINCT customer_id) AS customers\nFROM orders\nWHERE status = 'completed' AND NOT is_test\n  AND date_trunc('month', ordered_at",
+          "follows": " AT TIME ZONE 'Europe/Paris') = '2025-03-01';",
+          "violates": ") = '2025-03-01';",
+          "follows_head": " AT",
+          "violates_head": ")"
+        }
+      }
+    },
+    {
+      "id": "n_week",
+      "question": "Net revenue per week.",
+      "sql": "SELECT date_trunc('week', ordered_at AT TIME ZONE 'Europe/Paris') AS week,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+      "applies": [
+        "net_refunds",
+        "completed_only",
+        "exclude_test",
+        "currency_units",
+        "local_time"
+      ],
+      "corrupted": {
+        "net_refunds": "SELECT date_trunc('week', ordered_at AT TIME ZONE 'Europe/Paris') AS week,\n       SUM(amount_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+        "completed_only": "SELECT date_trunc('week', ordered_at AT TIME ZONE 'Europe/Paris') AS week,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE NOT is_test\nGROUP BY 1\nORDER BY 1;",
+        "exclude_test": "SELECT date_trunc('week', ordered_at AT TIME ZONE 'Europe/Paris') AS week,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed'\nGROUP BY 1\nORDER BY 1;",
+        "currency_units": "SELECT date_trunc('week', ordered_at AT TIME ZONE 'Europe/Paris') AS week,\n       SUM(amount_cents - refunded_cents) AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+        "local_time": "SELECT date_trunc('week', ordered_at) AS week,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;"
+      },
+      "kind": "near",
+      "near": "ex_month",
+      "nearest_example": "ex_month",
+      "similarity": {
+        "ex_month": 0.5,
+        "ex_country": 0.5,
+        "ex_top_customers": 0.333,
+        "ex_aov_segment": 0.0,
+        "ex_growth": 0.333
+      },
+      "decision_points": {
+        "net_refunds": {
+          "prefix": "SELECT date_trunc('week', ordered_at AT TIME ZONE 'Europe/Paris') AS week,\n       SUM(amount_cents",
+          "follows": " - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "violates": ") / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "follows_head": " -",
+          "violates_head": ")"
+        },
+        "completed_only": {
+          "prefix": "SELECT date_trunc('week', ordered_at AT TIME ZONE 'Europe/Paris') AS week,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE",
+          "follows": " status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "violates": " NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "follows_head": " status",
+          "violates_head": " NOT"
+        },
+        "exclude_test": {
+          "prefix": "SELECT date_trunc('week', ordered_at AT TIME ZONE 'Europe/Paris') AS week,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed'",
+          "follows": " AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "violates": "\nGROUP BY 1\nORDER BY 1;",
+          "follows_head": " AND",
+          "violates_head": "\nGROUP"
+        },
+        "currency_units": {
+          "prefix": "SELECT date_trunc('week', ordered_at AT TIME ZONE 'Europe/Paris') AS week,\n       SUM(amount_cents - refunded_cents)",
+          "follows": " / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "violates": " AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "follows_head": " /",
+          "violates_head": " AS"
+        },
+        "local_time": {
+          "prefix": "SELECT date_trunc('week', ordered_at",
+          "follows": " AT TIME ZONE 'Europe/Paris') AS week,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "violates": ") AS week,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY 1\nORDER BY 1;",
+          "follows_head": " AT",
+          "violates_head": ")"
+        }
+      }
+    },
+    {
+      "id": "n_country_top3",
+      "question": "Net revenue by country, top 3 only.",
+      "sql": "SELECT country,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country\nORDER BY net_revenue DESC\nLIMIT 3;",
+      "applies": [
+        "net_refunds",
+        "completed_only",
+        "exclude_test",
+        "currency_units"
+      ],
+      "corrupted": {
+        "net_refunds": "SELECT country,\n       SUM(amount_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country\nORDER BY net_revenue DESC\nLIMIT 3;",
+        "completed_only": "SELECT country,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE NOT is_test\nGROUP BY country\nORDER BY net_revenue DESC\nLIMIT 3;",
+        "exclude_test": "SELECT country,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed'\nGROUP BY country\nORDER BY net_revenue DESC\nLIMIT 3;",
+        "currency_units": "SELECT country,\n       SUM(amount_cents - refunded_cents) AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country\nORDER BY net_revenue DESC\nLIMIT 3;"
+      },
+      "kind": "near",
+      "near": "ex_country",
+      "nearest_example": "ex_country",
+      "similarity": {
+        "ex_month": 0.286,
+        "ex_country": 0.5,
+        "ex_top_customers": 0.375,
+        "ex_aov_segment": 0.0,
+        "ex_growth": 0.222
+      },
+      "decision_points": {
+        "net_refunds": {
+          "prefix": "SELECT country,\n       SUM(amount_cents",
+          "follows": " - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country\nORDER BY net_revenue DESC\nLIMIT 3;",
+          "violates": ") / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country\nORDER BY net_revenue DESC\nLIMIT 3;",
+          "follows_head": " -",
+          "violates_head": ")"
+        },
+        "completed_only": {
+          "prefix": "SELECT country,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE",
+          "follows": " status = 'completed' AND NOT is_test\nGROUP BY country\nORDER BY net_revenue DESC\nLIMIT 3;",
+          "violates": " NOT is_test\nGROUP BY country\nORDER BY net_revenue DESC\nLIMIT 3;",
+          "follows_head": " status",
+          "violates_head": " NOT"
+        },
+        "exclude_test": {
+          "prefix": "SELECT country,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed'",
+          "follows": " AND NOT is_test\nGROUP BY country\nORDER BY net_revenue DESC\nLIMIT 3;",
+          "violates": "\nGROUP BY country\nORDER BY net_revenue DESC\nLIMIT 3;",
+          "follows_head": " AND",
+          "violates_head": "\nGROUP"
+        },
+        "currency_units": {
+          "prefix": "SELECT country,\n       SUM(amount_cents - refunded_cents)",
+          "follows": " / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country\nORDER BY net_revenue DESC\nLIMIT 3;",
+          "violates": " AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country\nORDER BY net_revenue DESC\nLIMIT 3;",
+          "follows_head": " /",
+          "violates_head": " AS"
+        }
+      }
+    },
+    {
+      "id": "n_top5_customers",
+      "question": "Top 5 customers by net revenue.",
+      "sql": "SELECT customer_id,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY customer_id\nORDER BY net_revenue DESC\nLIMIT 5;",
+      "applies": [
+        "net_refunds",
+        "completed_only",
+        "exclude_test",
+        "currency_units"
+      ],
+      "corrupted": {
+        "net_refunds": "SELECT customer_id,\n       SUM(amount_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY customer_id\nORDER BY net_revenue DESC\nLIMIT 5;",
+        "completed_only": "SELECT customer_id,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE NOT is_test\nGROUP BY customer_id\nORDER BY net_revenue DESC\nLIMIT 5;",
+        "exclude_test": "SELECT customer_id,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed'\nGROUP BY customer_id\nORDER BY net_revenue DESC\nLIMIT 5;",
+        "currency_units": "SELECT customer_id,\n       SUM(amount_cents - refunded_cents) AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY customer_id\nORDER BY net_revenue DESC\nLIMIT 5;"
+      },
+      "kind": "near",
+      "near": "ex_top_customers",
+      "nearest_example": "ex_top_customers",
+      "similarity": {
+        "ex_month": 0.333,
+        "ex_country": 0.333,
+        "ex_top_customers": 0.667,
+        "ex_aov_segment": 0.0,
+        "ex_growth": 0.25
+      },
+      "decision_points": {
+        "net_refunds": {
+          "prefix": "SELECT customer_id,\n       SUM(amount_cents",
+          "follows": " - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY customer_id\nORDER BY net_revenue DESC\nLIMIT 5;",
+          "violates": ") / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY customer_id\nORDER BY net_revenue DESC\nLIMIT 5;",
+          "follows_head": " -",
+          "violates_head": ")"
+        },
+        "completed_only": {
+          "prefix": "SELECT customer_id,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE",
+          "follows": " status = 'completed' AND NOT is_test\nGROUP BY customer_id\nORDER BY net_revenue DESC\nLIMIT 5;",
+          "violates": " NOT is_test\nGROUP BY customer_id\nORDER BY net_revenue DESC\nLIMIT 5;",
+          "follows_head": " status",
+          "violates_head": " NOT"
+        },
+        "exclude_test": {
+          "prefix": "SELECT customer_id,\n       SUM(amount_cents - refunded_cents) / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed'",
+          "follows": " AND NOT is_test\nGROUP BY customer_id\nORDER BY net_revenue DESC\nLIMIT 5;",
+          "violates": "\nGROUP BY customer_id\nORDER BY net_revenue DESC\nLIMIT 5;",
+          "follows_head": " AND",
+          "violates_head": "\nGROUP"
+        },
+        "currency_units": {
+          "prefix": "SELECT customer_id,\n       SUM(amount_cents - refunded_cents)",
+          "follows": " / 100.0 AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY customer_id\nORDER BY net_revenue DESC\nLIMIT 5;",
+          "violates": " AS net_revenue\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY customer_id\nORDER BY net_revenue DESC\nLIMIT 5;",
+          "follows_head": " /",
+          "violates_head": " AS"
+        }
+      }
+    },
+    {
+      "id": "n_aov_country",
+      "question": "Average order value by country.",
+      "sql": "SELECT country,\n       SUM(amount_cents - refunded_cents) / 100.0 / COUNT(*) AS avg_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country;",
+      "applies": [
+        "net_refunds",
+        "completed_only",
+        "exclude_test",
+        "currency_units"
+      ],
+      "corrupted": {
+        "net_refunds": "SELECT country,\n       SUM(amount_cents) / 100.0 / COUNT(*) AS avg_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country;",
+        "completed_only": "SELECT country,\n       SUM(amount_cents - refunded_cents) / 100.0 / COUNT(*) AS avg_order_value\nFROM orders\nWHERE NOT is_test\nGROUP BY country;",
+        "exclude_test": "SELECT country,\n       SUM(amount_cents - refunded_cents) / 100.0 / COUNT(*) AS avg_order_value\nFROM orders\nWHERE status = 'completed'\nGROUP BY country;",
+        "currency_units": "SELECT country,\n       SUM(amount_cents - refunded_cents) / COUNT(*) AS avg_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country;"
+      },
+      "kind": "near",
+      "near": "ex_aov_segment",
+      "nearest_example": "ex_aov_segment",
+      "similarity": {
+        "ex_month": 0.0,
+        "ex_country": 0.167,
+        "ex_top_customers": 0.0,
+        "ex_aov_segment": 0.5,
+        "ex_growth": 0.0
+      },
+      "decision_points": {
+        "net_refunds": {
+          "prefix": "SELECT country,\n       SUM(amount_cents",
+          "follows": " - refunded_cents) / 100.0 / COUNT(*) AS avg_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country;",
+          "violates": ") / 100.0 / COUNT(*) AS avg_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country;",
+          "follows_head": " -",
+          "violates_head": ")"
+        },
+        "completed_only": {
+          "prefix": "SELECT country,\n       SUM(amount_cents - refunded_cents) / 100.0 / COUNT(*) AS avg_order_value\nFROM orders\nWHERE",
+          "follows": " status = 'completed' AND NOT is_test\nGROUP BY country;",
+          "violates": " NOT is_test\nGROUP BY country;",
+          "follows_head": " status",
+          "violates_head": " NOT"
+        },
+        "exclude_test": {
+          "prefix": "SELECT country,\n       SUM(amount_cents - refunded_cents) / 100.0 / COUNT(*) AS avg_order_value\nFROM orders\nWHERE status = 'completed'",
+          "follows": " AND NOT is_test\nGROUP BY country;",
+          "violates": "\nGROUP BY country;",
+          "follows_head": " AND",
+          "violates_head": "\nGROUP"
+        },
+        "currency_units": {
+          "prefix": "SELECT country,\n       SUM(amount_cents - refunded_cents) /",
+          "follows": " 100.0 / COUNT(*) AS avg_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country;",
+          "violates": " COUNT(*) AS avg_order_value\nFROM orders\nWHERE status = 'completed' AND NOT is_test\nGROUP BY country;",
+          "follows_head": " 100.0",
+          "violates_head": " COUNT(*)"
+        }
+      }
+    },
+    {
+      "id": "n_growth_quarter",
+      "question": "Quarter-over-quarter growth of net revenue.",
+      "sql": "SELECT quarter,\n       ROUND(100.0 * (net / LAG(net) OVER (ORDER BY quarter) - 1), 1) AS growth_pct\nFROM (SELECT date_trunc('quarter', ordered_at AT TIME ZONE 'Europe/Paris') AS quarter,\n             SUM(amount_cents - refunded_cents) / 100.0 AS net\n      FROM orders\n      WHERE status = 'completed' AND NOT is_test\n      GROUP BY 1) AS quarterly\nORDER BY quarter;",
+      "applies": [
+        "net_refunds",
+        "completed_only",
+        "exclude_test",
+        "currency_units",
+        "local_time",
+        "pct_scale",
+        "pct_round"
+      ],
+      "corrupted": {
+        "net_refunds": "SELECT quarter,\n       ROUND(100.0 * (net / LAG(net) OVER (ORDER BY quarter) - 1), 1) AS growth_pct\nFROM (SELECT date_trunc('quarter', ordered_at AT TIME ZONE 'Europe/Paris') AS quarter,\n             SUM(amount_cents) / 100.0 AS net\n      FROM orders\n      WHERE status = 'completed' AND NOT is_test\n      GROUP BY 1) AS quarterly\nORDER BY quarter;",
+        "completed_only": "SELECT quarter,\n       ROUND(100.0 * (net / LAG(net) OVER (ORDER BY quarter) - 1), 1) AS growth_pct\nFROM (SELECT date_trunc('quarter', ordered_at AT TIME ZONE 'Europe/Paris') AS quarter,\n             SUM(amount_cents - refunded_cents) / 100.0 AS net\n      FROM orders\n      WHERE NOT is_test\n      GROUP BY 1) AS quarterly\nORDER BY quarter;",
+        "exclude_test": "SELECT quarter,\n       ROUND(100.0 * (net / LAG(net) OVER (ORDER BY quarter) - 1), 1) AS growth_pct\nFROM (SELECT date_trunc('quarter', ordered_at AT TIME ZONE 'Europe/Paris') AS quarter,\n             SUM(amount_cents - refunded_cents) / 100.0 AS net\n      FROM orders\n      WHERE status = 'completed'\n      GROUP BY 1) AS quarterly\nORDER BY quarter;",
+        "currency_units": "SELECT quarter,\n       ROUND(100.0 * (net / LAG(net) OVER (ORDER BY quarter) - 1), 1) AS growth_pct\nFROM (SELECT date_trunc('quarter', ordered_at AT TIME ZONE 'Europe/Paris') AS quarter,\n             SUM(amount_cents - refunded_cents) AS net\n      FROM orders\n      WHERE status = 'completed' AND NOT is_test\n      GROUP BY 1) AS quarterly\nORDER BY quarter;",
+        "local_time": "SELECT quarter,\n       ROUND(100.0 * (net / LAG(net) OVER (ORDER BY quarter) - 1), 1) AS growth_pct\nFROM (SELECT date_trunc('quarter', ordered_at) AS quarter,\n             SUM(amount_cents - refunded_cents) / 100.0 AS net\n      FROM orders\n      WHERE status = 'completed' AND NOT is_test\n      GROUP BY 1) AS quarterly\nORDER BY quarter;",
+        "pct_scale": "SELECT quarter,\n       ROUND(1.0 * (net / LAG(net) OVER (ORDER BY quarter) - 1), 1) AS growth\nFROM (SELECT date_trunc('quarter', ordered_at AT TIME ZONE 'Europe/Paris') AS quarter,\n             SUM(amount_cents - refunded_cents) / 100.0 AS net\n      FROM orders\n      WHERE status = 'completed' AND NOT is_test\n      GROUP BY 1) AS quarterly\nORDER BY quarter;",
+        "pct_round": "SELECT quarter,\n       100.0 * (net / LAG(net) OVER (ORDER BY quarter) - 1) AS growth_pct\nFROM (SELECT date_trunc('quarter', ordered_at AT TIME ZONE 'Europe/Paris') AS quarter,\n             SUM(amount_cents - refunded_cents) / 100.0 AS net\n      FROM orders\n      WHERE status = 'completed' AND NOT is_test\n      GROUP BY 1) AS quarterly\nORDER BY quarter;"
+      },
+      "kind": "near",
+      "near": "ex_growth",
+      "nearest_example": "ex_growth",
+      "similarity": {
+        "ex_month": 0.333,
+        "ex_country": 0.333,
+        "ex_top_customers": 0.25,
+        "ex_aov_segment": 0.0,
+        "ex_growth": 0.667
+      },
+      "decision_points": {
+        "net_refunds": {
+          "prefix": "SELECT quarter,\n       ROUND(100.0 * (net / LAG(net) OVER (ORDER BY quarter) - 1), 1) AS growth_pct\nFROM (SELECT date_trunc('quarter', ordered_at AT TIME ZONE 'Europe/Paris') AS quarter,\n             SUM(amount_cents",
+          "follows": " - refunded_cents) / 100.0 AS net\n      FROM orders\n      WHERE status = 'completed' AND NOT is_test\n      GROUP BY 1) AS quarterly\nORDER BY quarter;",
+          "violates": ") / 100.0 AS net\n      FROM orders\n      WHERE status = 'completed' AND NOT is_test\n      GROUP BY 1) AS quarterly\nORDER BY quarter;",
+          "follows_head": " -",
+          "violates_head": ")"
+        },
+        "completed_only": {
+          "prefix": "SELECT quarter,\n       ROUND(100.0 * (net / LAG(net) OVER (ORDER BY quarter) - 1), 1) AS growth_pct\nFROM (SELECT date_trunc('quarter', ordered_at AT TIME ZONE 'Europe/Paris') AS quarter,\n             SUM(amount_cents - refunded_cents) / 100.0 AS net\n      FROM orders\n      WHERE",
+          "follows": " status = 'completed' AND NOT is_test\n      GROUP BY 1) AS quarterly\nORDER BY quarter;",
+          "violates": " NOT is_test\n      GROUP BY 1) AS quarterly\nORDER BY quarter;",
+          "follows_head": " status",
+          "violates_head": " NOT"
+        },
+        "exclude_test": {
+          "prefix": "SELECT quarter,\n       ROUND(100.0 * (net / LAG(net) OVER (ORDER BY quarter) - 1), 1) AS growth_pct\nFROM (SELECT date_trunc('quarter', ordered_at AT TIME ZONE 'Europe/Paris') AS quarter,\n             SUM(amount_cents - refunded_cents) / 100.0 AS net\n      FROM orders\n      WHERE status = 'completed'",
+          "follows": " AND NOT is_test\n      GROUP BY 1) AS quarterly\nORDER BY quarter;",
+          "violates": "\n      GROUP BY 1) AS quarterly\nORDER BY quarter;",
+          "follows_head": " AND",
+          "violates_head": "\n      GROUP"
+        },
+        "currency_units": {
+          "prefix": "SELECT quarter,\n       ROUND(100.0 * (net / LAG(net) OVER (ORDER BY quarter) - 1), 1) AS growth_pct\nFROM (SELECT date_trunc('quarter', ordered_at AT TIME ZONE 'Europe/Paris') AS quarter,\n             SUM(amount_cents - refunded_cents)",
+          "follows": " / 100.0 AS net\n      FROM orders\n      WHERE status = 'completed' AND NOT is_test\n      GROUP BY 1) AS quarterly\nORDER BY quarter;",
+          "violates": " AS net\n      FROM orders\n      WHERE status = 'completed' AND NOT is_test\n      GROUP BY 1) AS quarterly\nORDER BY quarter;",
+          "follows_head": " /",
+          "violates_head": " AS"
+        },
+        "local_time": {
+          "prefix": "SELECT quarter,\n       ROUND(100.0 * (net / LAG(net) OVER (ORDER BY quarter) - 1), 1) AS growth_pct\nFROM (SELECT date_trunc('quarter', ordered_at",
+          "follows": " AT TIME ZONE 'Europe/Paris') AS quarter,\n             SUM(amount_cents - refunded_cents) / 100.0 AS net\n      FROM orders\n      WHERE status = 'completed' AND NOT is_test\n      GROUP BY 1) AS quarterly\nORDER BY quarter;",
+          "violates": ") AS quarter,\n             SUM(amount_cents - refunded_cents) / 100.0 AS net\n      FROM orders\n      WHERE status = 'completed' AND NOT is_test\n      GROUP BY 1) AS quarterly\nORDER BY quarter;",
+          "follows_head": " AT",
+          "violates_head": ")"
+        },
+        "pct_scale": {
+          "prefix": "SELECT quarter,\n       ROUND(",
+          "follows": "100.0 * (net / LAG(net) OVER (ORDER BY quarter) - 1), 1) AS growth_pct\nFROM (SELECT date_trunc('quarter', ordered_at AT TIME ZONE 'Europe/Paris') AS quarter,\n             SUM(amount_cents - refunded_cents) / 100.0 AS net\n      FROM orders\n      WHERE status = 'completed' AND NOT is_test\n      GROUP BY 1) AS quarterly\nORDER BY quarter;",
+          "violates": "1.0 * (net / LAG(net) OVER (ORDER BY quarter) - 1), 1) AS growth\nFROM (SELECT date_trunc('quarter', ordered_at AT TIME ZONE 'Europe/Paris') AS quarter,\n             SUM(amount_cents - refunded_cents) / 100.0 AS net\n      FROM orders\n      WHERE status = 'completed' AND NOT is_test\n      GROUP BY 1) AS quarterly\nORDER BY quarter;",
+          "follows_head": "100.0",
+          "violates_head": "1.0"
+        },
+        "pct_round": {
+          "prefix": "SELECT quarter,",
+          "follows": "\n       ROUND(100.0 * (net / LAG(net) OVER (ORDER BY quarter) - 1), 1) AS growth_pct\nFROM (SELECT date_trunc('quarter', ordered_at AT TIME ZONE 'Europe/Paris') AS quarter,\n             SUM(amount_cents - refunded_cents) / 100.0 AS net\n      FROM orders\n      WHERE status = 'completed' AND NOT is_test\n      GROUP BY 1) AS quarterly\nORDER BY quarter;",
+          "violates": "\n       100.0 * (net / LAG(net) OVER (ORDER BY quarter) - 1) AS growth_pct\nFROM (SELECT date_trunc('quarter', ordered_at AT TIME ZONE 'Europe/Paris') AS quarter,\n             SUM(amount_cents - refunded_cents) / 100.0 AS net\n      FROM orders\n      WHERE status = 'completed' AND NOT is_test\n      GROUP BY 1) AS quarterly\nORDER BY quarter;",
+          "follows_head": "\n       ROUND(100.0",
+          "violates_head": "\n       100.0"
+        }
+      }
+    }
+  ]
+}
